@@ -4,7 +4,7 @@
 #include <linux/vmalloc.h>
 #include <linux/uaccess.h>
 #include <linux/version.h>
-#include <linux/thread_info.h>
+
 #include "uapi/supercall.h"
 #include "supercall/internal.h"
 #include "arch.h" // IWYU pragma: keep
@@ -23,7 +23,6 @@
 #include "sulog/fd.h"
 #include "supercall/supercall.h"
 #include "feature/uts_spoof.h"
-#include "feature/cpu_spoof.h"
 
 #ifdef CONFIG_KPM
 #include "kpm/kpm.h"
@@ -50,40 +49,6 @@ static int do_get_info(void __user *arg)
 
 #ifdef MODULE
     cmd.flags |= KSU_GET_INFO_FLAG_LKM;
-    if (ksu_bundled) {
-        cmd.flags |= KSU_GET_INFO_FLAG_BUNDLED;
-    }
-#endif
-
-    if (is_manager()) {
-        cmd.flags |= KSU_GET_INFO_FLAG_MANAGER;
-    }
-    if (ksu_late_loaded) {
-        cmd.flags |= KSU_GET_INFO_FLAG_LATE_LOAD;
-    }
-#ifdef EXPECTED_SIZE2
-    cmd.flags |= KSU_GET_INFO_FLAG_PR_BUILD;
-#endif
-    cmd.features = KSU_FEATURE_MAX;
-    cmd.uapi_version = KERNEL_SU_UAPI_VERSION;
-
-    if (copy_to_user(arg, &cmd, sizeof(cmd))) {
-        pr_err("get_version: copy_to_user failed\n");
-        return -EFAULT;
-    }
-
-    return 0;
-}
-
-static int do_get_info_legacy(void __user *arg)
-{
-    struct ksu_get_info_legacy_cmd cmd = { .version = KERNEL_SU_VERSION, .flags = 0 };
-
-#ifdef MODULE
-    cmd.flags |= KSU_GET_INFO_FLAG_LKM;
-    if (ksu_bundled) {
-        cmd.flags |= KSU_GET_INFO_FLAG_BUNDLED;
-    }
 #endif
 
     if (is_manager()) {
@@ -695,12 +660,6 @@ static int do_get_sulog_fd(void __user *arg)
     return ksu_install_sulog_fd();
 }
 
-static int do_disable_escape_to_root(void __user *arg)
-{
-    set_thread_flag(TIF_KSU_DISABLE_ESCAPE_WITH_ROOT);
-    return 0;
-}
-
 static int do_set_spoof_version(void __user *arg)
 {
     struct ksu_set_spoof_version_cmd cmd;
@@ -714,17 +673,6 @@ static int do_set_spoof_version(void __user *arg)
 
     return ksu_set_spoof_version(cmd.release[0] != '\0' ? cmd.release : NULL,
                                  cmd.version[0] != '\0' ? cmd.version : NULL);
-}
-
-static int do_set_spoof_cpu(void __user *arg)
-{
-    struct ksu_set_spoof_cpu_cmd cmd;
-
-    if (copy_from_user(&cmd, arg, sizeof(cmd))) {
-        return -EFAULT;
-    }
-
-    return ksu_set_spoof_cpu(&cmd);
 }
 
 static int list_try_umount(void __user *arg)
@@ -887,12 +835,6 @@ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
         .perm_check = always_allow
     },
     {
-        .cmd = KSU_IOCTL_GET_INFO_LEGACY,
-        .name = "GET_INFO_LEGACY",
-        .handler = do_get_info_legacy,
-        .perm_check = always_allow
-    },
-    {
         .cmd = KSU_IOCTL_REPORT_EVENT,
         .name = "REPORT_EVENT",
         .handler = do_report_event,
@@ -980,8 +922,7 @@ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
         .cmd = KSU_IOCTL_GET_WRAPPER_FD,
         .name = "GET_WRAPPER_FD",
         .handler = do_get_wrapper_fd,
-        .perm_check = manager_or_root,
-        .allow_su_session = true
+        .perm_check = manager_or_root
     },
     {
         .cmd = KSU_IOCTL_MANAGE_MARK,
@@ -1013,23 +954,10 @@ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
         .handler = do_get_sulog_fd,
         .perm_check = only_root
     },
-    { 
-        .cmd = KSU_IOCTL_DISABLE_ESCAPE_TO_ROOT, 
-        .name = "DISABLE_ESCAPE_TO_ROOT", 
-        .handler = do_disable_escape_to_root, 
-        .perm_check = only_root,
-        .allow_su_session = true
-    },
     {
         .cmd = KSU_IOCTL_SET_SPOOF_VERSION,
         .name = "SET_SPOOF_VERSION",
         .handler = do_set_spoof_version,
-        .perm_check = only_root
-    },
-    {
-        .cmd = KSU_IOCTL_SET_SPOOF_CPU,
-        .name = "SET_SPOOF_CPU",
-        .handler = do_set_spoof_cpu,
         .perm_check = only_root
     },
     { 
@@ -1073,7 +1001,7 @@ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
 };
 // clang-format on
 
-long ksu_supercall_handle_ioctl(const struct file *filp, unsigned int cmd, void __user *argp)
+long ksu_supercall_handle_ioctl(unsigned int cmd, void __user *argp)
 {
     int i;
 
@@ -1084,8 +1012,7 @@ long ksu_supercall_handle_ioctl(const struct file *filp, unsigned int cmd, void 
     for (i = 0; ksu_ioctl_handlers[i].handler; i++) {
         if (cmd == ksu_ioctl_handlers[i].cmd) {
             // Check permission first
-            if (ksu_ioctl_handlers[i].perm_check && !ksu_ioctl_handlers[i].perm_check() &&
-                !(ksu_ioctl_handlers[i].allow_su_session && ksu_is_su_session_fd(filp))) {
+            if (ksu_ioctl_handlers[i].perm_check && !ksu_ioctl_handlers[i].perm_check()) {
                 pr_warn("ksu ioctl: permission denied for cmd=0x%x uid=%d\n", cmd, current_uid().val);
                 return -EPERM;
             }

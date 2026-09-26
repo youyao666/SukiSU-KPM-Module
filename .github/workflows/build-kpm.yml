@@ -15,7 +15,7 @@ jobs:
     name: Build CONFIG_KPM=y for ${{ inputs.kmi || 'android12-5.10' }}
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/ylarod/ddk-min:${{ inputs.kmi || 'android12-5.10' }}-20260828
+      image: ghcr.io/ylarod/ddk-min:${{ inputs.kmi || 'android12-5.10' }}-20260313
       options: --privileged
 
     steps:
