@@ -12,10 +12,10 @@ on:
 
 jobs:
   build-kpm:
-    name: Build CONFIG_KPM=y for ${{ inputs.kmi }}
+    name: Build CONFIG_KPM=y for ${{ inputs.kmi || 'android12-5.10' }}
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/ylarod/ddk-min:${{ inputs.kmi }}-20260828
+      image: ghcr.io/ylarod/ddk-min:${{ inputs.kmi || 'android12-5.10' }}-20260828
       options: --privileged
 
     steps:
@@ -26,12 +26,12 @@ jobs:
       run: |
         git config --global --add safe.directory /__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}
         cd kernel
-        echo "=== Building kernelsu.ko (KPM=y) for KMI: ${{ inputs.kmi }} ==="
+        echo "=== Building kernelsu.ko (KPM=y) for KMI: ${{ inputs.kmi || 'android12-5.10' }} ==="
         CONFIG_KSU=m CONFIG_KPM=y CC=clang make
         echo "=== Build completed ==="
         OUT_DIR=/github/workspace/out
         mkdir -p $OUT_DIR
-        cp kernelsu.ko "$OUT_DIR/${{ inputs.kmi }}_kernelsu_kpm.ko"
+        cp kernelsu.ko "$OUT_DIR/${{ inputs.kmi || 'android12-5.10' }}_kernelsu_kpm.ko"
         ls -la "$OUT_DIR"
         echo "--- verify KPM symbols ---"
         nm kernelsu.ko 2>/dev/null | grep -c kpm || true
@@ -40,5 +40,5 @@ jobs:
     - name: Upload artifact
       uses: actions/upload-artifact@v7
       with:
-        name: kernelsu-kpm-${{ inputs.kmi }}
-        path: /github/workspace/out/${{ inputs.kmi }}_kernelsu_kpm.ko
+        name: kernelsu-kpm-${{ inputs.kmi || 'android12-5.10' }}
+        path: /github/workspace/out/${{ inputs.kmi || 'android12-5.10' }}_kernelsu_kpm.ko
