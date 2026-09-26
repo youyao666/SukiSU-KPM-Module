@@ -1,5 +1,7 @@
 name: Build SukiSU kernelsu.ko with KPM
 on:
+  push:
+    branches: [master]
   workflow_dispatch:
     inputs:
       kmi:
