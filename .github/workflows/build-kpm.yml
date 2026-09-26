@@ -1,0 +1,42 @@
+name: Build SukiSU kernelsu.ko with KPM
+on:
+  workflow_dispatch:
+    inputs:
+      kmi:
+        description: 'KMI version'
+        required: true
+        default: 'android12-5.10'
+        type: string
+
+jobs:
+  build-kpm:
+    name: Build CONFIG_KPM=y for ${{ inputs.kmi }}
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/ylarod/ddk-min:${{ inputs.kmi }}-20260828
+      options: --privileged
+
+    steps:
+    - name: Checkout source code
+      uses: actions/checkout@v6
+
+    - name: Build kernelsu.ko with KPM enabled
+      run: |
+        git config --global --add safe.directory /__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}
+        cd kernel
+        echo "=== Building kernelsu.ko (KPM=y) for KMI: ${{ inputs.kmi }} ==="
+        CONFIG_KSU=m CONFIG_KPM=y CC=clang make
+        echo "=== Build completed ==="
+        OUT_DIR=/github/workspace/out
+        mkdir -p $OUT_DIR
+        cp kernelsu.ko "$OUT_DIR/${{ inputs.kmi }}_kernelsu_kpm.ko"
+        ls -la "$OUT_DIR"
+        echo "--- verify KPM symbols ---"
+        nm kernelsu.ko 2>/dev/null | grep -c kpm || true
+        strings kernelsu.ko | grep -m 5 -i kpm || true
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: kernelsu-kpm-${{ inputs.kmi }}
+        path: /github/workspace/out/${{ inputs.kmi }}_kernelsu_kpm.ko
