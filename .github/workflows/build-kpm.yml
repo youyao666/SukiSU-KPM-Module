@@ -27,7 +27,7 @@ jobs:
         git config --global --add safe.directory /__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}
         cd kernel
         echo "=== Building kernelsu.ko (KPM=y) for KMI: ${{ inputs.kmi || 'android12-5.10' }} ==="
-        CONFIG_KSU=m CONFIG_KPM=y CC=clang make
+        CONFIG_KSU=m CONFIG_KPM=y CC=clang make kernelsu.ko
         echo "=== Build completed ==="
         OUT_DIR=/github/workspace/out
         mkdir -p $OUT_DIR
@@ -43,28 +43,3 @@ jobs:
         name: kernelsu-kpm-${{ inputs.kmi || 'android12-5.10' }}
         path: /github/workspace/out/${{ inputs.kmi || 'android12-5.10' }}_kernelsu_kpm.ko
 
-  build-ksud:
-    name: Build ksud with insmod (aarch64)
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v6
-    - name: Setup rustup
-      run: |
-        rustup update stable
-        rustup target add aarch64-linux-android
-    - uses: nttld/setup-ndk@v1
-      id: setup-ndk
-      with:
-        ndk-version: r29
-    - name: Build ksud
-      env:
-        ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-      run: |
-        cp -r kernel/include/uapi ./uapi
-        source .github/scripts/setup-rust-build.sh aarch64-linux-android 26
-        cargo build --target aarch64-linux-android --release --manifest-path ./userspace/ksud/Cargo.toml
-    - name: Upload ksud
-      uses: actions/upload-artifact@v7
-      with:
-        name: ksud-insmod-aarch64
-        path: target/aarch64-linux-android/release/ksud
