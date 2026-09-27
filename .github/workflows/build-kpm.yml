@@ -61,6 +61,7 @@ jobs:
         ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
       run: |
         cp -r uapi_main ./uapi
+        rm -f Cargo.lock
         source .github/scripts/setup-rust-build.sh aarch64-linux-android 26
         cargo build --target aarch64-linux-android --release --manifest-path ./userspace/ksud/Cargo.toml
     - name: Upload ksud
