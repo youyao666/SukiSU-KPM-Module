@@ -15,7 +15,6 @@
 #include "kpm/kpm.h"
 #include "supercall/internal.h"
 #include "arch.h"
-#include "util.h"
 #include "klog.h" // IWYU pragma: keep
 
 struct ksu_install_fd_tw {
@@ -72,7 +71,11 @@ static void ksu_install_fd_tw_func(struct callback_head *cb)
     pr_info("[%d] install ksu fd: %d\n", current->pid, fd);
     if (copy_to_user(tw->outp, &fd, sizeof(fd))) {
         pr_err("install ksu fd reply err\n");
-        ksu_close_fd(fd);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
+        close_fd(fd);
+#else
+        ksys_close(fd);
+#endif
     }
 
     kfree(tw);
