@@ -24,6 +24,8 @@ struct kpm_load_info
     Elf64_Shdr *sechdrs;
     char *secstrings, *strtab;
     unsigned long symoffs, stroffs;
+    unsigned long *ptr_slots;
+    unsigned int n_slots, slot_used;
     struct
     {
         unsigned int sym, str, mod, info;
@@ -38,6 +40,8 @@ struct kpm_module
     } info;
 
     char *args, *ctl_args;
+    unsigned long *ptr_slots;
+    unsigned int n_slots;
 
     mod_initcall_t *init;
     mod_ctl0call_t *ctl0;

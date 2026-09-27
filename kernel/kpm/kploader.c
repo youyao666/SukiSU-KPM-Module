@@ -246,8 +246,15 @@ static bool is_core_symbol(const Elf_Sym *src, const Elf_Shdr *sechdrs, unsigned
     return true;
 }
 
-/* Change all symbols so that st_value encodes the pointer directly. */
-static int simplify_symbols(struct kpm_module *mod, const struct kpm_load_info *info)
+/*
+ * KP symbol model: kpm code references kernel symbols as pointer
+ * VARIABLES (headers declare `extern void (*printk)(...)`), emitting
+ * `adrp xN, sym; ldr x8,[xN..]; blr x8`. The symbol value must therefore
+ * be a memory slot holding the real address, not the function body
+ * (r12 pstore: blr jumped to instruction bytes read from printk.cfi_jt).
+ * Each UND symbol gets an 8-byte slot; slots live until unload.
+ */
+static int simplify_symbols(struct kpm_module *mod, struct kpm_load_info *info)
 {
     Elf_Shdr *symsec = &info->sechdrs[info->index.sym];
     Elf_Sym *sym = (void *)symsec->sh_addr;
@@ -255,6 +262,16 @@ static int simplify_symbols(struct kpm_module *mod, const struct kpm_load_info *
     unsigned int i;
     int ret = 0;
     unsigned long addr = 0;
+    unsigned int n_und = 0;
+
+    for (i = 1; i < symsec->sh_size / sizeof(Elf_Sym); i++) {
+        if (sym[i].st_shndx == SHN_UNDEF && sym[i].st_name) n_und++;
+    }
+    if (n_und && !info->ptr_slots) {
+        info->ptr_slots = kmalloc_array(n_und, sizeof(unsigned long), GFP_KERNEL);
+        if (!info->ptr_slots) return -ENOMEM;
+        info->n_slots = n_und;
+    }
 
     for (i = 1; i < symsec->sh_size / sizeof(Elf_Sym); i++) {
         const char *name = info->strtab + sym[i].st_name;
@@ -268,14 +285,23 @@ static int simplify_symbols(struct kpm_module *mod, const struct kpm_load_info *
         case SHN_ABS:
             break;
         case SHN_UNDEF:
+            if (!sym[i].st_name)
+                break;
             addr = symbol_lookup_name(name);
             if (!addr) {
                 logke("unknown symbol: %s\n", name);
                 ret = -ENOENT;
                 break;
             }
-            pr_info("kpm: symbol %s -> %px\n", name, (void *)addr);
-            sym[i].st_value = addr;
+            if (!info->ptr_slots || info->slot_used >= info->n_slots) {
+                ret = -ENOMEM;
+                break;
+            }
+            info->ptr_slots[info->slot_used] = addr;
+            sym[i].st_value = (unsigned long)&info->ptr_slots[info->slot_used];
+            info->slot_used++;
+            pr_info("kpm: symbol %s -> slot %px -> %px\n", name,
+                    (void *)sym[i].st_value, (void *)addr);
             break;
         default:
             secbase = info->sechdrs[sym[i].st_shndx].sh_addr;
@@ -556,6 +582,9 @@ long kpm_load_module(const void *data, int len, const char *args, const char *ev
 
     if (!rc) {
         logkfi("[%s] succeed with [%s] \n", mod->info.name, args);
+        mod->ptr_slots = info->ptr_slots;
+        mod->n_slots = info->n_slots;
+        info->ptr_slots = NULL;
         list_add_tail(&mod->list, &kpm_modules.list);
         goto out;
     } else {
@@ -564,6 +593,7 @@ long kpm_load_module(const void *data, int len, const char *args, const char *ev
     }
 
 free:
+    if (info->ptr_slots) kfree(info->ptr_slots);
     if (mod->args) kvfree(mod->args);
     kp_free_exec(mod->start);
 free1:
@@ -591,6 +621,7 @@ long kpm_unload_module(const char *name, void *__user reserved)
 
     if (mod->args) kvfree(mod->args);
     if (mod->ctl_args) kvfree(mod->ctl_args);
+    if (mod->ptr_slots) kfree(mod->ptr_slots);
 
     kp_free_exec(mod->start);
     kvfree(mod);
