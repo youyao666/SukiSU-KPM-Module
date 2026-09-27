@@ -12,10 +12,10 @@ on:
 
 jobs:
   build-kpm:
-    name: Build CONFIG_KPM=y for ${{ inputs.kmi || 'android12-5.10' }}
+    name: Build CONFIG_KPM=y for KMI
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/ylarod/ddk-min:${{ inputs.kmi || 'android12-5.10' }}-20260828
+      image: ghcr.io/ylarod/ddk-min:android12-5.10-20260828
       options: --privileged
 
     steps:
@@ -24,28 +24,26 @@ jobs:
 
     - name: Build kernelsu.ko with KPM enabled
       run: |
-        git config --global --add safe.directory /__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}
+        git config --global --add safe.directory /__w/sukisu-kpm-build/sukisu-kpm-build
         cd kernel
         MODPOST=/opt/ddk/kdir/android12-5.10/scripts/mod/modpost.c
-        echo "=== Restoring modpost check_exports (undo ddk patch) ==="
-        sed -i -E 's|^([[:space:]]*)// check_exports\(mod\);|check_exports(mod);|' "$MODPOST" || true
-        sed -i -E 's|^([[:space:]]*)// s->module = exp->module;|s->module = exp->module;|' "$MODPOST" || true
-        sed -i 's/^static void __attribute__((unused)) check_exports(/static void check_exports(/' "$MODPOST" || true
-        grep -c "check_exports(mod);" "$MODPOST" || true
-        echo "=== Building kernelsu.ko (KPM=y) for KMI: ${{ inputs.kmi || 'android12-5.10' }} ==="
+        echo "=== Restore modpost check_exports ==="
+        sed -i -E "s|^([[:space:]]*)// check_exports\(mod\);|\1check_exports(mod);|" "$MODPOST" || true
+        sed -i -E "s|^([[:space:]]*)// s->module = exp->module;|\1s->module = exp->module;|" "$MODPOST" || true
+        sed -i "s/^static void __attribute__((unused)) check_exports(/static void check_exports(/" "$MODPOST" || true
+        grep -n "check_exports(mod);" "$MODPOST" || true
+        echo "=== Building kernelsu.ko (KPM=y) ==="
         CONFIG_KSU=m CONFIG_KPM=y CC=clang make
         echo "=== Build completed ==="
         OUT_DIR=/github/workspace/out
         mkdir -p $OUT_DIR
-        cp kernelsu.ko "$OUT_DIR/${{ inputs.kmi || 'android12-5.10' }}_kernelsu_kpm.ko"
+        cp kernelsu.ko "$OUT_DIR/android12-5.10_kernelsu_kpm.ko"
         ls -la "$OUT_DIR"
-        echo "--- verify KPM symbols ---"
         nm kernelsu.ko 2>/dev/null | grep -c kpm || true
-        strings kernelsu.ko | grep -m 5 -i kpm || true
+        strings kernelsu.ko | grep -m 3 -i kpm || true
 
     - name: Upload artifact
       uses: actions/upload-artifact@v7
       with:
-        name: kernelsu-kpm-${{ inputs.kmi || 'android12-5.10' }}
-        path: /github/workspace/out/${{ inputs.kmi || 'android12-5.10' }}_kernelsu_kpm.ko
-
+        name: kernelsu-kpm-android12-5.10
+        path: /github/workspace/out/android12-5.10_kernelsu_kpm.ko
