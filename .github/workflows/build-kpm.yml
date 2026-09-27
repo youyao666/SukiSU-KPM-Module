@@ -15,7 +15,7 @@ jobs:
     name: Build CONFIG_KPM=y for ${{ inputs.kmi || 'android12-5.10' }}
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/ylarod/ddk-min:${{ inputs.kmi || 'android12-5.10' }}-20260313
+      image: ghcr.io/ylarod/ddk-min:${{ inputs.kmi || 'android12-5.10' }}-20260828
       options: --privileged
 
     steps:
@@ -27,7 +27,7 @@ jobs:
         git config --global --add safe.directory /__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}
         cd kernel
         echo "=== Building kernelsu.ko (KPM=y) for KMI: ${{ inputs.kmi || 'android12-5.10' }} ==="
-        CONFIG_KSU=m CONFIG_KPM=y KSU_VERSION=40796 KSU_VERSION_FULL=\"v4.1.3-0ca744a8@HEAD\" CC=clang make
+        CONFIG_KSU=m CONFIG_KPM=y CC=clang make
         echo "=== Build completed ==="
         OUT_DIR=/github/workspace/out
         mkdir -p $OUT_DIR
