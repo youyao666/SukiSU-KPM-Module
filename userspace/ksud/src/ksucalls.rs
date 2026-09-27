@@ -1,132 +1,45 @@
 #![allow(clippy::unreadable_literal)]
-use anyhow::{Result, bail};
-
 use crate::ksu_uapi;
-use std::cell::Cell;
 use std::fs;
-use std::io;
 use std::os::fd::RawFd;
 use std::sync::OnceLock;
-
-// sigsys handler
-std::thread_local! {
-    #[allow(clippy::missing_const_for_thread_local)]
-    static SVC_IN_FLIGHT: Cell<bool> = const { Cell::new(false) };
-    #[allow(clippy::missing_const_for_thread_local)]
-    static SIGSYS_OCCURRED: Cell<bool> = const { Cell::new(false) };
-}
-
-const SYS_SECCOMP: libc::c_int = 1;
-
-fn with_svc_call<F, R>(call: F) -> R
-where
-    F: FnOnce() -> R,
-{
-    SVC_IN_FLIGHT.with(|in_flight| in_flight.set(true));
-    let result = call();
-    SVC_IN_FLIGHT.with(|in_flight| in_flight.set(false));
-    result
-}
-
-fn take_sigsys_occurred() -> bool {
-    SIGSYS_OCCURRED.with(|occurred| occurred.replace(false))
-}
-
-extern "C" fn sigsys_handler(
-    _sig: libc::c_int,
-    info: *mut libc::siginfo_t,
-    ctx: *mut libc::c_void,
-) {
-    unsafe {
-        if info.is_null() || ctx.is_null() || (*info).si_code != SYS_SECCOMP {
-            return;
-        }
-        if SVC_IN_FLIGHT.with(Cell::get) {
-            SIGSYS_OCCURRED.with(|occurred| occurred.set(true));
-        }
-
-        let ucontext = ctx.cast::<libc::ucontext_t>();
-        #[cfg(target_arch = "aarch64")]
-        {
-            (*ucontext).uc_mcontext.regs[0] = (-libc::EPERM) as u64;
-        }
-        #[cfg(target_arch = "x86_64")]
-        {
-            let rax = libc::REG_RAX as usize;
-            (*ucontext).uc_mcontext.gregs[rax] = i64::from(-libc::EPERM);
-        }
-    }
-}
-
-pub fn setup_sigsys_handler() {
-    unsafe {
-        let mut sa: libc::sigaction = std::mem::zeroed();
-        sa.sa_flags = libc::SA_SIGINFO;
-        sa.sa_sigaction = sigsys_handler as *const () as usize;
-        libc::sigemptyset(std::ptr::addr_of_mut!(sa.sa_mask));
-        if libc::sigaction(libc::SIGSYS, std::ptr::addr_of!(sa), std::ptr::null_mut()) != 0 {
-            let error = std::io::Error::last_os_error();
-            log::warn!("Failed to set SIGSYS handler: {error}");
-        }
-    }
-}
-
-const DRIVER_FD_NAME: &str = "anon_inode:[ksu_driver]";
-const SU_DRIVER_FD_NAME: &str = "anon_inode:[ksu_driver_su]";
 
 // Global driver fd cache
 static DRIVER_FD: OnceLock<RawFd> = OnceLock::new();
 static INFO_CACHE: OnceLock<ksu_uapi::ksu_get_info_cmd> = OnceLock::new();
 
-fn scan_driver_fd() -> io::Result<Option<RawFd>> {
-    let fd_dir = fs::read_dir("/proc/self/fd")?;
-    let mut driver_fd = None;
+fn scan_driver_fd() -> Option<RawFd> {
+    let fd_dir = fs::read_dir("/proc/self/fd").ok()?;
 
     for entry in fd_dir.flatten() {
         if let Ok(fd_num) = entry.file_name().to_string_lossy().parse::<i32>() {
             let link_path = format!("/proc/self/fd/{fd_num}");
             if let Ok(target) = fs::read_link(&link_path) {
                 let target_str = target.to_string_lossy();
-                if target_str == SU_DRIVER_FD_NAME {
-                    return Ok(Some(fd_num));
-                }
-                if target_str == DRIVER_FD_NAME {
-                    driver_fd = Some(fd_num);
+                if target_str.contains("[ksu_driver]") {
+                    return Some(fd_num);
                 }
             }
         }
     }
 
-    Ok(driver_fd)
-}
-
-pub fn claim_inherited_driver_fd() -> io::Result<()> {
-    if DRIVER_FD.get().is_none()
-        && let Some(fd) = scan_driver_fd()?
-    {
-        let _ = DRIVER_FD.set(fd);
-    }
-    Ok(())
+    None
 }
 
 // Get cached driver fd
 fn init_driver_fd() -> Option<RawFd> {
-    let fd = scan_driver_fd().ok().flatten();
+    let fd = scan_driver_fd();
     if fd.is_none() {
         let mut fd = -1;
-        with_svc_call(|| unsafe {
+        unsafe {
             libc::syscall(
                 libc::SYS_reboot,
                 ksu_uapi::KSU_INSTALL_MAGIC1,
                 ksu_uapi::KSU_INSTALL_MAGIC2,
                 0,
                 &mut fd,
-            )
-        });
-        if take_sigsys_occurred() {
-            eprintln!("KernelSU driver install syscall was blocked by seccomp");
-            log::error!("KernelSU driver install syscall was blocked by seccomp");
-        }
+            );
+        };
         if fd >= 0 { Some(fd) } else { None }
     } else {
         fd
@@ -134,34 +47,29 @@ fn init_driver_fd() -> Option<RawFd> {
 }
 
 // ioctl wrapper using libc
-pub fn ksuctl<T>(request: u32, arg: *mut T) -> Result<i32> {
+pub fn ksuctl<T>(request: u32, arg: *mut T) -> std::io::Result<i32> {
     use std::io;
 
     let fd = *DRIVER_FD.get_or_init(|| init_driver_fd().unwrap_or(-1));
-    if fd < 0 {
-        bail!("could not retrieve kernelsu driver fd")
-    }
     unsafe {
         let ret = libc::ioctl(fd as libc::c_int, request as i32, arg);
         if ret < 0 {
-            bail!("ksuctl failed: {}", io::Error::last_os_error())
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(ret)
         }
-        Ok(ret)
     }
 }
 
 // API implementations
-pub fn get_info() -> ksu_uapi::ksu_get_info_cmd {
+fn get_info() -> ksu_uapi::ksu_get_info_cmd {
     *INFO_CACHE.get_or_init(|| {
         let mut cmd = ksu_uapi::ksu_get_info_cmd {
             version: 0,
             flags: 0,
             features: 0,
-            uapi_version: 0,
         };
-        if ksuctl(ksu_uapi::KSU_IOCTL_GET_INFO, &raw mut cmd).is_err() {
-            let _ = ksuctl(ksu_uapi::KSU_IOCTL_GET_INFO_LEGACY, &raw mut cmd);
-        }
+        let _ = ksuctl(ksu_uapi::KSU_IOCTL_GET_INFO, &raw mut cmd);
         cmd
     })
 }
@@ -174,36 +82,7 @@ pub fn is_late_load() -> bool {
     get_info().flags & ksu_uapi::KSU_GET_INFO_FLAG_LATE_LOAD != 0
 }
 
-pub fn is_lkm() -> bool {
-    get_info().flags & ksu_uapi::KSU_GET_INFO_FLAG_LKM != 0
-}
-
-pub const fn uapi_version() -> u32 {
-    ksu_uapi::KERNEL_SU_UAPI_VERSION
-}
-
-pub fn runtime_mode() -> &'static str {
-    if is_late_load() {
-        "late-load"
-    } else if is_lkm() {
-        "lkm"
-    } else {
-        "built-in"
-    }
-}
-
-pub fn ensure_uapi_version_matched() -> anyhow::Result<()> {
-    let kernel_uapi = get_info().uapi_version;
-    let userspace_uapi = uapi_version();
-    if kernel_uapi != userspace_uapi {
-        bail!(
-            "UAPI version mismatch: kernel={kernel_uapi}, ksud={userspace_uapi}. Please update KernelSU!"
-        );
-    }
-    Ok(())
-}
-
-pub fn grant_root() -> Result<()> {
+pub fn grant_root() -> std::io::Result<()> {
     ksuctl(ksu_uapi::KSU_IOCTL_GRANT_ROOT, std::ptr::null_mut::<u8>())?;
     Ok(())
 }
@@ -231,7 +110,7 @@ pub fn check_kernel_safemode() -> bool {
     cmd.in_safe_mode != 0
 }
 
-pub fn set_sepolicy(payload: *const u8, payload_len: u64) -> Result<i32> {
+pub fn set_sepolicy(payload: *const u8, payload_len: u64) -> std::io::Result<i32> {
     let mut ioctl_cmd = crate::ksu_uapi::ksu_set_sepolicy_cmd {
         data_len: payload_len,
         data: payload as u64,
@@ -242,7 +121,7 @@ pub fn set_sepolicy(payload: *const u8, payload_len: u64) -> Result<i32> {
 
 /// Get feature value and support status from kernel
 /// Returns (value, supported)
-pub fn get_feature(feature_id: u32) -> Result<(u64, bool)> {
+pub fn get_feature(feature_id: u32) -> std::io::Result<(u64, bool)> {
     let mut cmd = ksu_uapi::ksu_get_feature_cmd {
         feature_id,
         value: 0,
@@ -253,13 +132,13 @@ pub fn get_feature(feature_id: u32) -> Result<(u64, bool)> {
 }
 
 /// Set feature value in kernel
-pub fn set_feature(feature_id: u32, value: u64) -> Result<()> {
+pub fn set_feature(feature_id: u32, value: u64) -> std::io::Result<()> {
     let mut cmd = ksu_uapi::ksu_set_feature_cmd { feature_id, value };
     ksuctl(ksu_uapi::KSU_IOCTL_SET_FEATURE, &raw mut cmd)?;
     Ok(())
 }
 
-pub fn get_wrapped_fd(fd: RawFd) -> Result<RawFd> {
+pub fn get_wrapped_fd(fd: RawFd) -> std::io::Result<RawFd> {
     let mut cmd = ksu_uapi::ksu_get_wrapper_fd_cmd {
         fd: fd as u32,
         flags: 0,
@@ -268,14 +147,14 @@ pub fn get_wrapped_fd(fd: RawFd) -> Result<RawFd> {
     Ok(result)
 }
 
-pub fn get_sulog_fd() -> Result<RawFd> {
+pub fn get_sulog_fd() -> std::io::Result<RawFd> {
     let mut cmd = ksu_uapi::ksu_get_sulog_fd_cmd { flags: 0 };
     let result = ksuctl(ksu_uapi::KSU_IOCTL_GET_SULOG_FD, &raw mut cmd)?;
     Ok(result)
 }
 
 /// Get mark status for a process (pid=0 returns total marked count)
-pub fn mark_get(pid: i32) -> Result<u32> {
+pub fn mark_get(pid: i32) -> std::io::Result<u32> {
     let mut cmd = ksu_uapi::ksu_manage_mark_cmd {
         operation: ksu_uapi::KSU_MARK_GET,
         pid,
@@ -286,7 +165,7 @@ pub fn mark_get(pid: i32) -> Result<u32> {
 }
 
 /// Mark a process (pid=0 marks all processes)
-pub fn mark_set(pid: i32) -> Result<()> {
+pub fn mark_set(pid: i32) -> std::io::Result<()> {
     let mut cmd = ksu_uapi::ksu_manage_mark_cmd {
         operation: ksu_uapi::KSU_MARK_MARK,
         pid,
@@ -297,7 +176,7 @@ pub fn mark_set(pid: i32) -> Result<()> {
 }
 
 /// Unmark a process (pid=0 unmarks all processes)
-pub fn mark_unset(pid: i32) -> Result<()> {
+pub fn mark_unset(pid: i32) -> std::io::Result<()> {
     let mut cmd = ksu_uapi::ksu_manage_mark_cmd {
         operation: ksu_uapi::KSU_MARK_UNMARK,
         pid,
@@ -308,7 +187,7 @@ pub fn mark_unset(pid: i32) -> Result<()> {
 }
 
 /// Refresh mark for all running processes
-pub fn mark_refresh() -> Result<()> {
+pub fn mark_refresh() -> std::io::Result<()> {
     let mut cmd = ksu_uapi::ksu_manage_mark_cmd {
         operation: ksu_uapi::KSU_MARK_REFRESH,
         pid: 0,
@@ -328,7 +207,7 @@ pub fn nuke_ext4_sysfs(mnt: &str) -> anyhow::Result<()> {
 }
 
 /// Wipe all entries from umount list
-pub fn umount_list_wipe() -> Result<()> {
+pub fn umount_list_wipe() -> std::io::Result<()> {
     let mut cmd = ksu_uapi::ksu_add_try_umount_cmd {
         arg: 0,
         flags: 0,
@@ -363,22 +242,11 @@ pub fn umount_list_del(path: &str) -> anyhow::Result<()> {
 }
 
 /// Set current process's process group to init_group (pgid = 0)
-pub fn set_init_pgrp() -> Result<()> {
+pub fn set_init_pgrp() -> std::io::Result<()> {
     ksuctl(
         ksu_uapi::KSU_IOCTL_SET_INIT_PGRP,
         std::ptr::null_mut::<u8>(),
     )?;
-    Ok(())
-}
-
-pub fn set_ksu_no_new_privs() -> anyhow::Result<()> {
-    let result = ksuctl(
-        ksu_uapi::KSU_IOCTL_DISABLE_ESCAPE_TO_ROOT,
-        std::ptr::null_mut::<u8>(),
-    )?;
-    if result != 0 {
-        bail!("unexpected result: {result}");
-    }
     Ok(())
 }
 
@@ -413,23 +281,5 @@ pub fn set_spoof_version(release: &str, version: &str) -> anyhow::Result<()> {
     cmd.version[..v_len].copy_from_slice(&v_bytes[..v_len]);
 
     ksuctl(ksu_uapi::KSU_IOCTL_SET_SPOOF_VERSION, &raw mut cmd)?;
-    Ok(())
-}
-
-pub fn set_spoof_cpu(
-    cpu_index: u32,
-    midr: u32,
-    bogomips: u32,
-    hwcap: u64,
-    hwcap2: u64,
-) -> anyhow::Result<()> {
-    let mut cmd = ksu_uapi::ksu_set_spoof_cpu_cmd {
-        cpu_index,
-        midr,
-        bogomips,
-        hwcap,
-        hwcap2,
-    };
-    ksuctl(ksu_uapi::KSU_IOCTL_SET_SPOOF_CPU, &raw mut cmd)?;
     Ok(())
 }

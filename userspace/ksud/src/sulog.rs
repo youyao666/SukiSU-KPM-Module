@@ -631,22 +631,22 @@ fn handle_readable(fd: RawFd, writer: &mut DailyLogWriter) -> Result<ReadState> 
     }
 }
 
-pub fn open_sulog_fd() -> Result<OwnedFd> {
+pub fn open_sulog_fd() -> io::Result<OwnedFd> {
     let fd = ksucalls::get_sulog_fd()?;
-    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
-    let flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFL) };
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     if flags < 0 {
-        bail!("open_sulog_fd: get flags: {}", io::Error::last_os_error())
+        let err = io::Error::last_os_error();
+        let _ = unsafe { libc::close(fd) };
+        return Err(err);
     }
 
-    if unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
-        bail!(
-            "open_sulog_fd: set cloexec flags: {}",
-            io::Error::last_os_error()
-        )
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        let err = io::Error::last_os_error();
+        let _ = unsafe { libc::close(fd) };
+        return Err(err);
     }
 
-    Ok(fd)
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
 fn write_session_marker(
@@ -779,7 +779,8 @@ pub fn run_sulogd() -> Result<()> {
 
 pub fn spawn_sulogd() -> Result<()> {
     if utils::create_daemon(true)? {
-        let mut command = Command::new("/proc/self/exe");
+        let current_exe = std::env::current_exe().context("failed to resolve current ksud path")?;
+        let mut command = Command::new(current_exe);
         command
             .arg("sulogd")
             .stdin(Stdio::null())
@@ -787,13 +788,10 @@ pub fn spawn_sulogd() -> Result<()> {
             .stderr(Stdio::null())
             .current_dir("/");
 
-        let err = command.exec();
-        log::error!("failed to exec sulogd: {err:#}");
-        unsafe {
-            libc::_exit(1);
-        }
+        Err(command.exec()).context("failed to exec sulogd")
+    } else {
+        Ok(())
     }
-    Ok(())
 }
 
 pub fn ensure_sulogd_running() -> Result<()> {
