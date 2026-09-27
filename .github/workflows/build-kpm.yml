@@ -42,10 +42,16 @@ jobs:
         echo "=== Build completed ==="
         OUT_DIR=/github/workspace/out
         mkdir -p $OUT_DIR
-        python3 /__w/sukisu-kpm-build/sukisu-kpm-build/fix_und.py kernelsu.ko
+        echo "=== UND symbols (should be kernel-exported only, no do_kpm/sukisu_*) ==="
+        readelf -sW kernelsu.ko 2>/dev/null | awk '$7=="UND" && $8!="" {print $8}' | sort -u | tee /tmp/und.txt | head -50
+        echo "=== fatal UND check ==="
+        if grep -qE '^(do_kpm|sukisu_handle_kpm|sukisu_kpm_|sukisu_compact_)' /tmp/und.txt; then
+          echo "FATAL: kpm symbols still UND - link incomplete"; exit 1
+        fi
+        echo "=== stub symbols present check ==="
+        nm kernelsu.ko 2>/dev/null | grep -E 'sukisu_kpm_load_module_path|sukisu_handle_kpm|do_kpm$' || { echo "FATAL: kpm.o not linked"; exit 1; }
         cp kernelsu.ko "$OUT_DIR/android12-5.10_kernelsu_kpm.ko"
         ls -la "$OUT_DIR"
-        nm kernelsu.ko 2>/dev/null | grep -c kpm || true
         strings kernelsu.ko | grep -m 3 -i kpm || true
 
     - name: Upload artifact

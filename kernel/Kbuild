@@ -71,9 +71,12 @@ endif
 endif
 
 ccflags-$(CONFIG_KPM) += -DCONFIG_KPM
-obj-$(CONFIG_KPM) += kpm/compact.o
-obj-$(CONFIG_KPM) += kpm/kpm.o
-obj-$(CONFIG_KPM) += kpm/super_access.o
+# kpm/* must be in kernelsu-objs to be linked into kernelsu.ko (module build);
+# the bare obj-$(CONFIG_KPM) entries never reach the module link (r3 bug:
+# do_kpm stayed UND -> fix_und redirect made a cfi_jt self-loop)
+kernelsu-objs += kpm/compact.o
+kernelsu-objs += kpm/kpm.o
+kernelsu-objs += kpm/super_access.o
 
 ccflags-y += -I$(srctree)/security/selinux -I$(srctree)/security/selinux/include
 ccflags-y += -I$(objtree)/security/selinux -include $(srctree)/include/uapi/asm-generic/errno.h
