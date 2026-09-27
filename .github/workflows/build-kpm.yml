@@ -42,6 +42,7 @@ jobs:
         echo "=== Build completed ==="
         OUT_DIR=/github/workspace/out
         mkdir -p $OUT_DIR
+        python3 /__w/sukisu-kpm-build/sukisu-kpm-build/fix_und.py kernelsu.ko
         cp kernelsu.ko "$OUT_DIR/android12-5.10_kernelsu_kpm.ko"
         ls -la "$OUT_DIR"
         nm kernelsu.ko 2>/dev/null | grep -c kpm || true
