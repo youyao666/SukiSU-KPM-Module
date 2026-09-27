@@ -32,14 +32,13 @@ jobs:
         echo skip-restore-tolerance
         sed -i "s/^static void __attribute__((unused)) check_exports(/static void check_exports(/" "$MODPOST" || true
         grep -n "check_exports(mod);" "$MODPOST" || true
-        sed -i "s/merror/warn/g" "$MODPOST" || true
         rm -f /opt/ddk/kdir/android12-5.10/scripts/mod/modpost
         touch "$MODPOST"
         gcc -O2 -c -I/opt/ddk/src/android12-5.10/scripts/mod -I/opt/ddk/kdir/android12-5.10/scripts/mod -Dmain=file2alias_main /opt/ddk/src/android12-5.10/scripts/mod/file2alias.c -o /tmp/file2alias.o 2>&1 || true
         gcc -O2 -I/opt/ddk/src/android12-5.10/scripts/mod -I/opt/ddk/kdir/android12-5.10/scripts/mod -o /opt/ddk/kdir/android12-5.10/scripts/mod/modpost /opt/ddk/src/android12-5.10/scripts/mod/modpost.c /opt/ddk/src/android12-5.10/scripts/mod/sumversion.c /tmp/file2alias.o 2>&1 || true
         ls -la /opt/ddk/kdir/android12-5.10/scripts/mod/modpost || true
         echo "=== Building kernelsu.ko (KPM=y) ==="
-        CONFIG_KSU=m CONFIG_KPM=y CC=clang make
+        CONFIG_KSU=m CONFIG_KPM=y KBUILD_MODPOST_WARN=1 CC=clang make
         echo "=== Build completed ==="
         OUT_DIR=/github/workspace/out
         mkdir -p $OUT_DIR
