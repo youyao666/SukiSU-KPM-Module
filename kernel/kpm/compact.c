@@ -61,6 +61,23 @@ static void sukisu_set_manager_uid(uid_t uid, int force)
         ksu_manager_appid = uid;
 }
 
+/*
+ * KernelPatch environment symbols that KPM modules reference as UND
+ * (demo-hello: kpver / kf_strncat / compat_copy_to_user). The upstream
+ * patch environment provides them; module form serves them from here.
+ */
+static int kpm_kpver = 5;
+
+static char *kpm_kf_strncat(char *dest, const char *src, size_t count)
+{
+    return strncat(dest, src, count);
+}
+
+static int kpm_compat_copy_to_user(void __user *to, const void *from, int n)
+{
+    return copy_to_user(to, from, n) ? -EFAULT : n;
+}
+
 struct CompactAddressSymbol {
     const char *symbol_name;
     void *addr;
@@ -77,7 +94,10 @@ static struct CompactAddressSymbol address_symbol[] = {
     { "is_uid_should_umount", &sukisu_is_uid_should_umount },
     { "is_current_uid_manager", &sukisu_is_current_uid_manager },
     { "get_manager_uid", &sukisu_get_manager_uid },
-    { "sukisu_set_manager_uid", &sukisu_set_manager_uid }
+    { "sukisu_set_manager_uid", &sukisu_set_manager_uid },
+    { "kpver", &kpm_kpver },
+    { "kf_strncat", &kpm_kf_strncat },
+    { "compat_copy_to_user", &kpm_compat_copy_to_user }
 };
 
 unsigned long sukisu_compact_find_symbol(const char *name)
