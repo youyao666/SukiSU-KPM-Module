@@ -48,7 +48,18 @@ jobs:
         rm -f "$KDIR/scripts/mod/modpost"
         touch "$MODPOST"
         gcc -O2 -c -I"$SRC/scripts/mod" -I"$KDIR/scripts/mod" -Dmain=file2alias_main "$SRC/scripts/mod/file2alias.c" -o /tmp/file2alias.o || true
-        gcc -O2 -I"$SRC/scripts/mod" -I"$KDIR/scripts/mod" -o "$KDIR/scripts/mod/modpost" "$MODPOST" "$SRC/scripts/mod/sumversion.c" /tmp/file2alias.o || true
+        # 6.6+ splits modpost (symcheck.c etc.) - compile every helper except file2alias
+        MODS="$SRC/scripts/mod"
+        SRCS=""
+        for f in "$MODS"/*.c; do
+          b=$(basename "$f")
+          case "$b" in
+            modpost.c|sumversion.c|file2alias.c) continue ;;
+            *) SRCS="$SRCS $f" ;;
+          esac
+        done
+        echo "modpost sources: modpost.c sumversion.c$SRCS"
+        gcc -O2 -I"$SRC/scripts/mod" -I"$KDIR/scripts/mod" -o "$KDIR/scripts/mod/modpost" "$MODPOST" "$MODS/sumversion.c" $SRCS /tmp/file2alias.o || true
         if [ ! -x "$KDIR/scripts/mod/modpost" ]; then
           echo "::error::modpost rebuild failed for $KMI"; exit 1
         fi
