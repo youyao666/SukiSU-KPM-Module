@@ -75,16 +75,20 @@ static void kp_execmem_resolve(void)
 #define __nocfi __attribute__((no_sanitize("cfi")))
 #endif
 
-static void *__nocfi kp_call_module_alloc(void *target, unsigned long size)
+unsigned long __nocfi kp_remote_call4(void *fn, unsigned long a0, unsigned long a1,
+                                      unsigned long a2, unsigned long a3)
 {
-    void *(*fn)(unsigned long) = target;
-    return fn(size);
-}
-
-static void __nocfi kp_call_module_memfree(void *target, void *ptr)
-{
-    void (*fn)(void *) = target;
-    fn(ptr);
+    register unsigned long x0 __asm__("x0") = a0;
+    register unsigned long x1 __asm__("x1") = a1;
+    register unsigned long x2 __asm__("x2") = a2;
+    register unsigned long x3 __asm__("x3") = a3;
+    __asm__ volatile(
+        "blr %[fn]"
+        : "+r"(x0), "+r"(x1), "+r"(x2), "+r"(x3)
+        : [fn] "r"(fn)
+        : "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12",
+          "x13", "x14", "x15", "x16", "x17", "x18", "lr", "cc", "memory");
+    return x0;
 }
 
 static inline void *kp_malloc_exec(unsigned int size)
@@ -92,13 +96,13 @@ static inline void *kp_malloc_exec(unsigned int size)
     kp_execmem_resolve();
     if (!pfn_module_alloc)
         return NULL;
-    return kp_call_module_alloc((void *)pfn_module_alloc, size);
+    return (void *)kp_remote_call4((void *)pfn_module_alloc, size, 0, 0, 0);
 }
 
 static inline void kp_free_exec(void *ptr)
 {
     if (pfn_module_memfree && ptr)
-        kp_call_module_memfree((void *)pfn_module_memfree, ptr);
+        kp_remote_call4((void *)pfn_module_memfree, (unsigned long)ptr, 0, 0, 0);
 }
 
 static inline void kp_flush_icache_all(void)
@@ -507,7 +511,8 @@ long kpm_load_module(const void *data, int len, const char *args, const char *ev
 
     kp_flush_icache_all();
 
-    rc = (*mod->init)(mod->args, event, reserved);
+    rc = (long)kp_remote_call4((void *)*mod->init, (unsigned long)mod->args,
+                               (unsigned long)event, (unsigned long)reserved, 0);
 
     if (!rc) {
         logkfi("[%s] succeed with [%s] \n", mod->info.name, args);
@@ -515,7 +520,7 @@ long kpm_load_module(const void *data, int len, const char *args, const char *ev
         goto out;
     } else {
         logkfi("[%s] failed with [%s] error: %d, try exit ...\n", mod->info.name, args, (int)rc);
-        (*mod->exit)(reserved);
+        kp_remote_call4((void *)*mod->exit, (unsigned long)reserved, 0, 0, 0);
     }
 
 free:
@@ -542,7 +547,7 @@ long kpm_unload_module(const char *name, void *__user reserved)
         goto out;
     }
     list_del(&mod->list);
-    rc = (*mod->exit)(reserved);
+    rc = (long)kp_remote_call4((void *)*mod->exit, (unsigned long)reserved, 0, 0, 0);
 
     if (mod->args) kvfree(mod->args);
     if (mod->ctl_args) kvfree(mod->ctl_args);
@@ -648,7 +653,8 @@ long kpm_module_control0(const char *name, const char *ctl_args, char *__user ou
 
     strcpy(mod->ctl_args, ctl_args);
 
-    rc = (*mod->ctl0)(mod->ctl_args, out_msg, outlen);
+    rc = (long)kp_remote_call4((void *)*mod->ctl0, (unsigned long)mod->ctl_args,
+                               (unsigned long)out_msg, (unsigned long)outlen, 0);
 
     logkfi("name: %s, rc: %d\n", name, (int)rc);
 out:
@@ -674,7 +680,8 @@ long kpm_module_control1(const char *name, void *a1, void *a2, void *a3)
         goto out;
     }
 
-    rc = (*mod->ctl1)(a1, a2, a3);
+    rc = (long)kp_remote_call4((void *)*mod->ctl1, (unsigned long)a1,
+                               (unsigned long)a2, (unsigned long)a3, 0);
 
     logkfi("name: %s, rc: %d\n", name, (int)rc);
 out:
