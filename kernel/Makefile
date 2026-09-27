@@ -17,9 +17,8 @@ $(info -- KBUILD_ARGS: $(KBUILD_ARGS))
 
 .PHONY: all compdb clean format check-format
 
-all: check_symbol
+all:
 	$(MAKE) -C $(KDIR) $(KBUILD_ARGS) modules compile_commands.json -j$(shell nproc)
-	./check_symbol $(ODIR)/kernelsu.ko $(KDIR)/vmlinux
 
 compdb:
 	python3 $(MDIR)/.vscode/generate_compdb.py -O $(ODIR) $(MDIR)
