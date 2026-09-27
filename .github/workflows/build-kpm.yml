@@ -3,19 +3,24 @@ on:
   push:
     branches: [master]
   workflow_dispatch:
-    inputs:
-      kmi:
-        description: 'KMI version'
-        required: true
-        default: 'android12-5.10'
-        type: string
 
 jobs:
   build-kpm:
-    name: Build CONFIG_KPM=y for KMI
+    name: KPM ${{ matrix.kmi }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        kmi:
+          - android12-5.10
+          - android13-5.10
+          - android13-5.15
+          - android14-5.15
+          - android14-6.1
+          - android15-6.6
+          - android16-6.12
     container:
-      image: ghcr.io/ylarod/ddk-min:android12-5.10-20260828
+      image: ghcr.io/ylarod/ddk-min:${{ matrix.kmi }}-20260828
       options: --privileged
 
     steps:
@@ -24,38 +29,55 @@ jobs:
 
     - name: Build kernelsu.ko with KPM enabled
       run: |
-        git config --global --add safe.directory /__w/sukisu-kpm-build/sukisu-kpm-build
+        KMI=${{ matrix.kmi }}
+        WS=${{ github.workspace }}
+        git config --global --add safe.directory "$WS"
         cd kernel
-        MODPOST=/opt/ddk/src/android12-5.10/scripts/mod/modpost.c
-        echo "=== Restore modpost check_exports (src tree) ==="
+        SRC=/opt/ddk/src/$KMI
+        KDIR=/opt/ddk/kdir/$KMI
+        MODPOST=$SRC/scripts/mod/modpost.c
+
+        echo "=== Restore modpost check_exports (src tree: $KMI) ==="
         sed -i 's,//		check_exports(mod);,		check_exports(mod);,' "$MODPOST" || true
         sed -i 's,//		s->module = exp->module;,		s->module = exp->module;,' "$MODPOST" || true
         sed -i "s/^static void __attribute__((unused)) check_exports(/static void check_exports(/" "$MODPOST" || true
-        grep -n "check_exports(mod);" "$MODPOST" || true
-        rm -f /opt/ddk/kdir/android12-5.10/scripts/mod/modpost
+        if ! grep -q "check_exports(mod);" "$MODPOST"; then
+          echo "::error::modpost patch pattern not found - ddk image layout changed for $KMI"; exit 1
+        fi
+
+        rm -f "$KDIR/scripts/mod/modpost"
         touch "$MODPOST"
-        gcc -O2 -c -I/opt/ddk/src/android12-5.10/scripts/mod -I/opt/ddk/kdir/android12-5.10/scripts/mod -Dmain=file2alias_main /opt/ddk/src/android12-5.10/scripts/mod/file2alias.c -o /tmp/file2alias.o 2>&1 || true
-        gcc -O2 -I/opt/ddk/src/android12-5.10/scripts/mod -I/opt/ddk/kdir/android12-5.10/scripts/mod -o /opt/ddk/kdir/android12-5.10/scripts/mod/modpost /opt/ddk/src/android12-5.10/scripts/mod/modpost.c /opt/ddk/src/android12-5.10/scripts/mod/sumversion.c /tmp/file2alias.o 2>&1 || true
-        ls -la /opt/ddk/kdir/android12-5.10/scripts/mod/modpost || true
-        echo "=== Building kernelsu.ko (KPM=y) ==="
+        gcc -O2 -c -I"$SRC/scripts/mod" -I"$KDIR/scripts/mod" -Dmain=file2alias_main "$SRC/scripts/mod/file2alias.c" -o /tmp/file2alias.o || true
+        gcc -O2 -I"$SRC/scripts/mod" -I"$KDIR/scripts/mod" -o "$KDIR/scripts/mod/modpost" "$MODPOST" "$SRC/scripts/mod/sumversion.c" /tmp/file2alias.o || true
+        if [ ! -x "$KDIR/scripts/mod/modpost" ]; then
+          echo "::error::modpost rebuild failed for $KMI"; exit 1
+        fi
+
+        echo "=== Building kernelsu.ko (KPM=y, $KMI) ==="
         CONFIG_KSU=m CONFIG_KPM=y KBUILD_MODPOST_WARN=1 CC=clang make
         echo "=== Build completed ==="
-        OUT_DIR=/github/workspace/out
-        mkdir -p $OUT_DIR
+
+        echo "=== Sanity: __versions must be non-empty (MODVERSIONS kernels reject empty CRC tables) ==="
+        if ! readelf -SW kernelsu.ko | grep -q __versions; then
+          echo "::error::no __versions section - module will fail to load on MODVERSIONS kernels"; exit 1
+        fi
+
         echo "=== UND symbols (should be kernel-exported only, no do_kpm/sukisu_*) ==="
         readelf -sW kernelsu.ko 2>/dev/null | awk '$7=="UND" && $8!="" {print $8}' | sort -u | tee /tmp/und.txt | head -50
-        echo "=== fatal UND check ==="
         if grep -qE '^(do_kpm|sukisu_handle_kpm|sukisu_kpm_|sukisu_compact_)' /tmp/und.txt; then
-          echo "FATAL: kpm symbols still UND - link incomplete"; exit 1
+          echo "::error::kpm symbols still UND - link incomplete"; exit 1
         fi
-        echo "=== stub symbols present check ==="
-        nm kernelsu.ko 2>/dev/null | grep -E 'sukisu_kpm_load_module_path|sukisu_handle_kpm|do_kpm$' || { echo "FATAL: kpm.o not linked"; exit 1; }
-        cp kernelsu.ko "$OUT_DIR/android12-5.10_kernelsu_kpm.ko"
+        if ! nm kernelsu.ko 2>/dev/null | grep -qE 'T sukisu_kpm_load_module_path'; then
+          echo "::error::kpm.o not linked"; exit 1
+        fi
+
+        OUT_DIR="$WS/out"
+        mkdir -p "$OUT_DIR"
+        cp kernelsu.ko "$OUT_DIR/${KMI}_kernelsu_kpm.ko"
         ls -la "$OUT_DIR"
-        strings kernelsu.ko | grep -m 3 -i kpm || true
 
     - name: Upload artifact
       uses: actions/upload-artifact@v7
       with:
-        name: kernelsu-kpm-android12-5.10
-        path: /github/workspace/out/android12-5.10_kernelsu_kpm.ko
+        name: kernelsu-kpm-${{ matrix.kmi }}
+        path: ${{ github.workspace }}/out/${{ matrix.kmi }}_kernelsu_kpm.ko
