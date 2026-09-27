@@ -34,7 +34,7 @@ jobs:
         grep -n "check_exports(mod);" "$MODPOST" || true
         rm -f /opt/ddk/kdir/android12-5.10/scripts/mod/modpost
         touch "$MODPOST"
-        gcc -O2 -I/opt/ddk/src/android12-5.10/scripts/mod -I/opt/ddk/kdir/android12-5.10/scripts/mod -o /opt/ddk/kdir/android12-5.10/scripts/mod/modpost /opt/ddk/src/android12-5.10/scripts/mod/modpost.c /opt/ddk/src/android12-5.10/scripts/mod/sumversion.c 2>&1 || true
+        gcc -O2 -I/opt/ddk/src/android12-5.10/scripts/mod -I/opt/ddk/kdir/android12-5.10/scripts/mod -o /opt/ddk/kdir/android12-5.10/scripts/mod/modpost /opt/ddk/src/android12-5.10/scripts/mod/modpost.c /opt/ddk/src/android12-5.10/scripts/mod/sumversion.c /opt/ddk/src/android12-5.10/scripts/mod/file2alias.c -Dmain=file2alias_main 2>&1 || true
         ls -la /opt/ddk/kdir/android12-5.10/scripts/mod/modpost || true
         echo "=== Building kernelsu.ko (KPM=y) ==="
         CONFIG_KSU=m CONFIG_KPM=y CC=clang make
