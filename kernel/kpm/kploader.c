@@ -669,6 +669,7 @@ out:
 struct kpm_module *kpm_find_module(const char *name)
 {
     struct kpm_module *pos;
+    kpm_loader_init();
     list_for_each_entry(pos, &kpm_modules.list, list)
     {
         if (!strcmp(name, pos->info.name)) {
@@ -680,6 +681,7 @@ struct kpm_module *kpm_find_module(const char *name)
 
 int kpm_get_module_nums(void)
 {
+    kpm_loader_init();
     rcu_read_lock();
 
     struct kpm_module *pos;
@@ -696,6 +698,7 @@ int kpm_get_module_nums(void)
 
 int kpm_list_modules(char *out_names, int size)
 {
+    kpm_loader_init();
     rcu_read_lock();
 
     struct kpm_module *pos;
