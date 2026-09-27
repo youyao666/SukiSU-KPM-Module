@@ -391,7 +391,7 @@ static int move_module(struct kpm_module *mod, struct kpm_load_info *info)
                                          (unsigned long)((mod->size + PAGE_SIZE - 1) >> PAGE_SHIFT),
                                          0, 0);
         pr_info("kpm: set_memory_x rc=%ld pages=%x\n", xrc,
-                (mod->size + PAGE_SIZE - 1) >> PAGE_SHIFT);
+                (unsigned int)((mod->size + PAGE_SIZE - 1) >> PAGE_SHIFT));
     } else {
         pr_err("kpm: set_memory_x unresolved, exec will fault\n");
     }
