@@ -34,6 +34,7 @@
 #include "kploader.h"
 #include "kplo.h"
 #include "compact.h"
+#include "infra/symbol_resolver.h"
 
 #define SZ_128M 0x08000000
 
@@ -54,14 +55,34 @@ static inline unsigned long symbol_lookup_name(const char *name)
     return sukisu_compact_find_symbol(name);
 }
 
+/*
+ * module_alloc/module_memfree are not exported on arm64 5.10 (no CRC in
+ * Module.symvers -> insmod would fail with unknown symbol), so resolve
+ * them from kallsyms at runtime like the rest of the unexported symbols.
+ */
+static void *(*pfn_module_alloc)(unsigned long);
+static void (*pfn_module_memfree)(void *);
+
+static void kp_execmem_resolve(void)
+{
+    if (!pfn_module_alloc)
+        pfn_module_alloc = (void *)find_kernel_symbol_exact("module_alloc");
+    if (!pfn_module_memfree)
+        pfn_module_memfree = (void *)find_kernel_symbol_exact("module_memfree");
+}
+
 static inline void *kp_malloc_exec(unsigned int size)
 {
-    return module_alloc(size);
+    kp_execmem_resolve();
+    if (!pfn_module_alloc)
+        return NULL;
+    return pfn_module_alloc(size);
 }
 
 static inline void kp_free_exec(void *ptr)
 {
-    module_memfree(ptr);
+    if (pfn_module_memfree && ptr)
+        pfn_module_memfree(ptr);
 }
 
 static inline void kp_flush_icache_all(void)

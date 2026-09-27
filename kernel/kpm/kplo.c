@@ -17,6 +17,7 @@
 
 #include "kplo.h"
 #include "kploader.h"
+#include "infra/symbol_resolver.h"
 
 /* android12-5.10 uapi headers may predate these two relocation names */
 #ifndef R_AARCH64_ADR_GOT_PAGE
@@ -28,6 +29,18 @@
 
 #define AARCH64_INSN_IMM_MOVNZ AARCH64_INSN_IMM_MAX
 #define AARCH64_INSN_IMM_MOVK AARCH64_INSN_IMM_16
+
+/* not exported on arm64 5.10 (no CRC entry) -> resolve from kallsyms */
+static u32 (*pfn_encode_immediate)(enum aarch64_insn_imm_type type, u32 insn, u32 imm);
+
+static u32 kp_encode_immediate(enum aarch64_insn_imm_type type, u32 insn, u32 imm)
+{
+    if (!pfn_encode_immediate)
+        pfn_encode_immediate = (void *)find_kernel_symbol_exact("aarch64_insn_encode_immediate");
+    if (!pfn_encode_immediate)
+        return 0;
+    return pfn_encode_immediate(type, insn, imm);
+}
 
 enum aarch64_reloc_op
 {
@@ -122,7 +135,7 @@ static int reloc_insn_movw(enum aarch64_reloc_op op, void *place, u64 val, int l
     }
 
     /* Update the instruction with the new encoding. */
-    insn = aarch64_insn_encode_immediate(imm_type, insn, imm);
+    insn = kp_encode_immediate(imm_type, insn, imm);
     *(u32 *)place = cpu_to_le32(insn);
 
     /* Shift out the immediate field. */
@@ -159,7 +172,7 @@ static int reloc_insn_imm(enum aarch64_reloc_op op, void *place, u64 val, int ls
     imm_mask = (BIT(lsb + len) - 1) >> lsb;
     imm = sval & imm_mask;
     /* Update the instruction's immediate field. */
-    insn = aarch64_insn_encode_immediate(imm_type, insn, imm);
+    insn = kp_encode_immediate(imm_type, insn, imm);
     *(u32 *)place = cpu_to_le32(insn);
     /*
 	 * Extract the upper value bits (including the sign bit) and
