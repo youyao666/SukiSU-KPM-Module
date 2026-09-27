@@ -28,8 +28,8 @@ jobs:
         cd kernel
         MODPOST=/opt/ddk/src/android12-5.10/scripts/mod/modpost.c
         echo "=== Restore modpost check_exports (src tree) ==="
-        sed -i -E "s|^([[:space:]]*)// check_exports\(mod\);|\1check_exports(mod);|" "$MODPOST" || true
-        sed -i -E "s|^([[:space:]]*)// s->module = exp->module;|\1s->module = exp->module;|" "$MODPOST" || true
+        sed -i 's,//		check_exports(mod);,		check_exports(mod);,' "$MODPOST" || true
+        echo skip-restore-tolerance
         sed -i "s/^static void __attribute__((unused)) check_exports(/static void check_exports(/" "$MODPOST" || true
         grep -n "check_exports(mod);" "$MODPOST" || true
         rm -f /opt/ddk/kdir/android12-5.10/scripts/mod/modpost
