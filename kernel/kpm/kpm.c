@@ -37,6 +37,7 @@
 #endif
 #include "kpm.h"
 #include "compact.h"
+#include "kploader.h"
 
 #define KPM_NAME_LEN 32
 #define KPM_ARGS_LEN 1024
@@ -51,73 +52,69 @@
 #endif
 #endif
 
-noinline NO_OPTIMIZE void sukisu_kpm_load_module_path(const char *path,
-                                                      const char *args,
-                                                      void *ptr, int *result)
+/*
+ * Upstream keeps these as stubs to be runtime-hooked by the KernelPatch
+ * patch (SukiSU_KernelPatch_patch kernel/patch/sukisu/sukisu.c); in
+ * module form we call the real loader directly (kpm/kploader.c).
+ */
+noinline void sukisu_kpm_load_module_path(const char *path,
+                                           const char *args,
+                                           void *ptr, int *result)
 {
-    pr_info("kpm: Stub function called (sukisu_kpm_load_module_path). "
-            "path=%s args=%s ptr=%p\n",
-            path, args, ptr);
-
-    __asm__ volatile("nop");
+    if (result)
+        *result = (int)kpm_load_module_path(path, args, ptr);
 }
 EXPORT_SYMBOL(sukisu_kpm_load_module_path);
 
-noinline NO_OPTIMIZE void sukisu_kpm_unload_module(const char *name, void *ptr,
-                                                   int *result)
+noinline void sukisu_kpm_unload_module(const char *name, void *ptr,
+                                       int *result)
 {
-    pr_info("kpm: Stub function called (sukisu_kpm_unload_module). "
-            "name=%s ptr=%p\n",
-            name, ptr);
-
-    __asm__ volatile("nop");
+    if (result)
+        *result = (int)kpm_unload_module(name, ptr);
 }
 EXPORT_SYMBOL(sukisu_kpm_unload_module);
 
-noinline NO_OPTIMIZE void sukisu_kpm_num(int *result)
+noinline void sukisu_kpm_num(int *result)
 {
-    pr_info("kpm: Stub function called (sukisu_kpm_num).\n");
-
-    __asm__ volatile("nop");
+    if (result)
+        *result = kpm_get_module_nums();
 }
 EXPORT_SYMBOL(sukisu_kpm_num);
 
-noinline NO_OPTIMIZE void sukisu_kpm_info(const char *name, char *buf,
-                                          int bufferSize, int *size)
+noinline void sukisu_kpm_info(const char *name, char *buf,
+                              int bufferSize, int *size)
 {
-    pr_info("kpm: Stub function called (sukisu_kpm_info). "
-            "name=%s buffer=%p\n",
-            name, buf);
-
-    __asm__ volatile("nop");
+    if (size)
+        *size = kpm_get_module_info(name, buf, bufferSize);
 }
 EXPORT_SYMBOL(sukisu_kpm_info);
 
-noinline NO_OPTIMIZE void sukisu_kpm_list(void *out, int bufferSize,
-                                          int *result)
+noinline void sukisu_kpm_list(void *out, int bufferSize,
+                              int *result)
 {
-    pr_info("kpm: Stub function called (sukisu_kpm_list). "
-            "buffer=%p size=%d\n",
-            out, bufferSize);
+    if (result)
+        *result = kpm_list_modules(out, bufferSize);
 }
 EXPORT_SYMBOL(sukisu_kpm_list);
 
-noinline NO_OPTIMIZE void sukisu_kpm_control(const char *name, const char *args,
-                                             long arg_len, int *result)
+noinline void sukisu_kpm_control(const char *name, const char *args,
+                                 long arg_len, int *result)
 {
-    pr_info("kpm: Stub function called (sukisu_kpm_control). "
-            "name=%p args=%p arg_len=%ld\n",
-            name, args, arg_len);
-
-    __asm__ volatile("nop");
+    if (!result)
+        return;
+    if (arg_len <= 0) {
+        *result = -EINVAL;
+        return;
+    }
+    *result = (int)kpm_module_control0(name, args, NULL, 0);
 }
 EXPORT_SYMBOL(sukisu_kpm_control);
 
-noinline NO_OPTIMIZE void sukisu_kpm_version(char *buf, int bufferSize)
+noinline void sukisu_kpm_version(char *buf, int bufferSize)
 {
-    pr_info("kpm: Stub function called (sukisu_kpm_version). "
-            "buffer=%p\n",
-            buf);
+    if (!buf || bufferSize <= 0)
+        return;
+    snprintf(buf, bufferSize - 1, "5.0.0 (KernelPatch-port 2026-09-27)");
 }
 EXPORT_SYMBOL(sukisu_kpm_version);
 
@@ -127,7 +124,7 @@ noinline int sukisu_handle_kpm(unsigned long control_code, unsigned long arg1,
     int res = -1;
     if (control_code == SUKISU_KPM_LOAD) {
         char kernel_load_path[256];
-        char kernel_args_buffer[256];
+        char kernel_args_buffer[256] = { 0 };
 
         if (arg1 == 0) {
             res = -EINVAL;

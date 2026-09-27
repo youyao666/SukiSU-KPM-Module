@@ -77,6 +77,8 @@ ccflags-$(CONFIG_KPM) += -DCONFIG_KPM
 kernelsu-objs += kpm/compact.o
 kernelsu-objs += kpm/kpm.o
 kernelsu-objs += kpm/super_access.o
+kernelsu-objs += kpm/kploader.o
+kernelsu-objs += kpm/kplo.o
 
 ccflags-y += -I$(srctree)/security/selinux -I$(srctree)/security/selinux/include
 ccflags-y += -I$(objtree)/security/selinux -include $(srctree)/include/uapi/asm-generic/errno.h
