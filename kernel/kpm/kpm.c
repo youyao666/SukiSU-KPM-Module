@@ -279,7 +279,7 @@ int sukisu_is_kpm_control_code(unsigned long control_code)
                0;
 }
 
-int do_kpm(void __user *arg)
+__visible int do_kpm(void __user *arg)
 {
     struct ksu_kpm_cmd cmd;
 
