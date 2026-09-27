@@ -51,7 +51,7 @@ jobs:
         # 6.6+ splits modpost (symcheck.c); whitelist only known-safe extras
         MODS="$SRC/scripts/mod"
         SRCS=""
-        for extra in symcheck.c; do
+        for extra in symcheck.c symsearch.c; do
           [ -f "$MODS/$extra" ] && SRCS="$SRCS $MODS/$extra"
         done
         echo "modpost sources: modpost.c sumversion.c$SRCS"
