@@ -62,6 +62,7 @@ static inline unsigned long symbol_lookup_name(const char *name)
  */
 static void *(*pfn_module_alloc)(unsigned long);
 static void (*pfn_module_memfree)(void *);
+static int (*pfn_set_memory_x)(unsigned long addr, int numpages);
 
 static void kp_execmem_resolve(void)
 {
@@ -69,6 +70,8 @@ static void kp_execmem_resolve(void)
         pfn_module_alloc = (void *)find_kernel_symbol_exact("module_alloc");
     if (!pfn_module_memfree)
         pfn_module_memfree = (void *)find_kernel_symbol_exact("module_memfree");
+    if (!pfn_set_memory_x)
+        pfn_set_memory_x = (void *)find_kernel_symbol_exact("set_memory_x");
 }
 
 #ifndef __nocfi
@@ -348,6 +351,23 @@ static int move_module(struct kpm_module *mod, struct kpm_load_info *info)
     }
     pr_info("kpm: module mem at %px\n", mod->start);
     memset(mod->start, 0, mod->size);
+
+    /*
+     * r10 pstore: el1 page fault executing at the module memory (NX).
+     * module_alloc hands out NX pages; the in-kernel module loader
+     * would set_memory_x at complete_formation, we bypass it -> do it
+     * ourselves (kallsyms + asm caller, CFI-proof).
+     */
+    if (pfn_set_memory_x) {
+        long xrc = (long)kp_remote_call4((void *)pfn_set_memory_x,
+                                         (unsigned long)mod->start,
+                                         (unsigned long)((mod->size + PAGE_SIZE - 1) >> PAGE_SHIFT),
+                                         0, 0);
+        pr_info("kpm: set_memory_x rc=%ld pages=%x\n", xrc,
+                (mod->size + PAGE_SIZE - 1) >> PAGE_SHIFT);
+    } else {
+        pr_err("kpm: set_memory_x unresolved, exec will fault\n");
+    }
 
     /* Transfer each section which specifies SHF_ALLOC */
     logkd("final section addresses:\n");
