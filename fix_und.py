@@ -5,7 +5,7 @@ import struct, sys
 def fix(path):
     d = bytearray(open(path, 'rb').read())
     e_shoff, = struct.unpack_from('<Q', d, 0x28)
-    e_shentsize, e_shnum, e_shstrndx = struct.unpack_from('<HH', d, 0x3A)
+    e_shentsize, e_shnum, e_shstrndx = struct.unpack_from('<HHH', d, 0x3A)
     def shdr(i):
         o = e_shoff + i * e_shentsize
         name, typ, flags, addr, off, size, link, info, align, entsize = struct.unpack_from('<IIQQQQIIQQ', d, o)
