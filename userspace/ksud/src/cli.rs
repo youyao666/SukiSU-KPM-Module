@@ -6,17 +6,18 @@ use android_logger::Config;
 use log::{LevelFilter, error, info};
 
 use crate::boot_patch::{BootPatchArgs, BootRestoreArgs};
+use crate::lkm_image::BootPatchV2Args;
 use crate::module::regenerate_preinit_rc;
 #[cfg(target_arch = "aarch64")]
 use crate::susfs;
 use crate::{
-    apk_sign, assets, debug, defs, init_event, ksucalls, module, module_config, sulog, umount,
-    utils,
+    apk_sign, assets, debug, defs, init_event, ksu_uapi, ksucalls, module, module_config, sulog,
+    umount, utils,
 };
 
 /// KernelSU userspace cli
 #[derive(Parser, Debug)]
-#[command(author, version = defs::VERSION_NAME, about, long_about = None)]
+#[command(author, version = defs::FULL_VERSION, about, long_about = None)]
 struct Args {
     #[command(subcommand)]
     command: Commands,
@@ -63,7 +64,7 @@ enum Commands {
         kmi: Option<String>,
 
         /// manager package name
-        #[arg(long, default_value_t = String::from("com.sukisu.ultra"))]
+        #[arg(long, default_value_t = String::from(defs::DEFAULT_PACKAGE_NAME))]
         package_name: String,
 
         /// kernel release string to spoof
@@ -91,6 +92,9 @@ enum Commands {
     Install {
         #[arg(long, default_value = None)]
         libadbroot: Option<PathBuf>,
+
+        #[arg(long, default_value = None)]
+        data_path: Option<PathBuf>,
     },
 
     /// Unload KernelSU kernel module (LKM Only)
@@ -98,7 +102,7 @@ enum Commands {
 
     /// Uninstall KernelSU modules and itself(LKM Only)
     Uninstall {
-        #[arg(long, default_value_t = String::from("com.sukisu.ultra"))]
+        #[arg(long, default_value_t = String::from(defs::DEFAULT_PACKAGE_NAME))]
         package_name: String,
     },
 
@@ -125,6 +129,11 @@ enum Commands {
 
     /// Restore boot or init_boot images patched by KernelSU
     BootRestore(BootRestoreArgs),
+
+    /// Patch KernelSU into a boot image
+    ///
+    /// Always operates on a boot image; never selects init_boot or vendor_boot.
+    BootPatchV2(BootPatchV2Args),
 
     /// Show boot information
     BootInfo {
@@ -212,7 +221,7 @@ enum Debug {
     /// Set the manager app, kernel CONFIG_KSU_DEBUG should be enabled.
     SetManager {
         /// manager package name
-        #[arg(default_value_t = String::from("com.sukisu.ultra"))]
+        #[arg(default_value_t = String::from(defs::DEFAULT_PACKAGE_NAME))]
         apk: String,
     },
 
@@ -251,6 +260,12 @@ enum Debug {
 
     /// Launch sulogd daemon manually
     Sulogd,
+
+    /// Get kernel info
+    Info,
+
+    /// Print default package name
+    Package,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -501,6 +516,24 @@ enum Kernel {
         #[arg(short, long)]
         version: Option<String>,
     },
+    /// Spoof CPU identity (MIDR/HWCAP/vvar) at runtime
+    SpoofCpu {
+        /// Target CPU index (0..=num_possible_cpus-1)
+        #[arg(short, long)]
+        cpu: u32,
+        /// MIDR value (hex, e.g. 0x413fd0c1)
+        #[arg(short, long, value_parser = parse_hex_u32)]
+        midr: u32,
+        /// BogoMIPS value (decimal, e.g. 2400)
+        #[arg(short, long, default_value_t = 0)]
+        bogomips: u32,
+        /// Primary ELF hwcap mask (hex)
+        #[arg(long, value_parser = parse_hex_u64, default_value_t = 0)]
+        hwcap: u64,
+        /// Secondary ELF hwcap2 mask (hex)
+        #[arg(long, value_parser = parse_hex_u64, default_value_t = 0)]
+        hwcap2: u64,
+    },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -584,8 +617,158 @@ enum Susfs {
     Status,
     /// Get SUSFS Version
     Version,
-    /// Get SUSFS enable Features
+    /// Get SUSFS Variant
+    Variant,
+    /// Get SUSFS enabled Features
     Features,
+    /// Spoof kernel uname
+    SetUname {
+        /// kernel release string
+        release: String,
+        /// kernel version string
+        version: String,
+    },
+    /// Enable or disable SUSFS kernel log
+    EnableLog {
+        /// 0 to disable, 1 to enable
+        enabled: u32,
+    },
+    /// Enable or disable AVC log spoofing
+    EnableAvcLogSpoofing {
+        /// 0 to disable, 1 to enable
+        enabled: u32,
+    },
+    /// Spoof /proc/cmdline (non-gki) or /proc/bootconfig (gki) from a text file
+    SetCmdlineOrBootconfig {
+        /// path to the fake cmdline/bootconfig file
+        path: String,
+    },
+    /// Hide SUS mounts for non-su processes
+    HideSusMntsForNonSuProcs {
+        /// 0 to disable, 1 to enable
+        enabled: u32,
+    },
+    /// Add open redirect
+    AddOpenRedirect {
+        /// target path
+        target: String,
+        /// redirected path
+        redirected: String,
+        /// uid scheme
+        uid_scheme: u32,
+    },
+    /// Add SUS map
+    AddSusMap {
+        /// library path
+        path: String,
+    },
+    /// Add SUS path
+    AddSusPath {
+        /// path to add
+        path: String,
+    },
+    /// Add SUS loop path
+    AddSusPathLoop {
+        /// path to add
+        path: String,
+    },
+    /// Add SUS kstat
+    AddSusKstat {
+        /// path to add
+        path: String,
+    },
+    /// Update SUS kstat
+    UpdateSusKstat {
+        /// path to update
+        path: String,
+    },
+    /// Update SUS kstat full clone
+    UpdateSusKstatFullClone {
+        /// path to update
+        path: String,
+    },
+    /// Add SUS kstat statically
+    AddSusKstatStatically {
+        /// path
+        path: String,
+        /// ino
+        ino: u64,
+        /// dev
+        dev: u64,
+        /// nlink
+        nlink: u32,
+        /// size
+        size: u64,
+        /// atime sec
+        atime_sec: i64,
+        /// atime nsec
+        atime_nsec: u64,
+        /// mtime sec
+        mtime_sec: i64,
+        /// mtime nsec
+        mtime_nsec: u64,
+        /// ctime sec
+        ctime_sec: i64,
+        /// ctime nsec
+        ctime_nsec: u64,
+        /// blocks
+        blocks: u64,
+        /// blksize
+        blksize: i64,
+    },
+    /// Manage the SuSFS Magisk auto-start module
+    Module {
+        #[cfg(target_arch = "aarch64")]
+        #[clap(subcommand)]
+        command: SusfsModuleCmd,
+    },
+    /// Manage SuSFS persistent configuration
+    Config {
+        #[cfg(target_arch = "aarch64")]
+        #[clap(subcommand)]
+        command: SusfsConfigCmd,
+    },
+}
+
+/// susfs module subcommands
+#[cfg(target_arch = "aarch64")]
+#[derive(clap::Subcommand, Debug)]
+pub enum SusfsModuleCmd {
+    /// Install (or reinstall) the SuSFS auto-start module from saved config
+    Install,
+    /// Remove the SuSFS auto-start module
+    Remove,
+    /// Check if the module is installed
+    Status,
+}
+
+/// susfs config subcommands
+#[cfg(target_arch = "aarch64")]
+#[derive(clap::Subcommand, Debug)]
+pub enum SusfsConfigCmd {
+    /// Get a config value by key
+    Get {
+        /// Config key (e.g. sus_paths, enable_log)
+        key: String,
+    },
+    /// Set a config value
+    Set {
+        /// Config key
+        key: String,
+        /// Config value (use empty string to clear a multi-value key)
+        value: String,
+    },
+    /// Remove a config key
+    Remove {
+        /// Config key
+        key: String,
+    },
+    /// Clear all config values
+    Clear,
+    /// Reset all config keys to defaults
+    Reset,
+    /// List all config key=value pairs (one per line)
+    List,
 }
 
 pub fn run() -> Result<()> {
@@ -595,9 +778,11 @@ pub fn run() -> Result<()> {
             .with_tag("KernelSU"),
     );
 
+    ksucalls::setup_sigsys_handler();
+
     // the kernel executes su with argv[0] = "su" and replace it with us
     let arg0 = std::env::args().next().unwrap_or_default();
-    if arg0 == "su" || arg0 == "/system/bin/su" {
+    if arg0 == "su" || arg0.ends_with("/su") {
         return crate::su::root_shell();
     }
 
@@ -727,7 +912,10 @@ pub fn run() -> Result<()> {
                 }
             }
         }
-        Commands::Install { libadbroot } => utils::install(libadbroot),
+        Commands::Install {
+            libadbroot,
+            data_path,
+        } => utils::install(libadbroot, data_path),
         Commands::Unload => crate::unload::unload(),
         Commands::Uninstall { package_name } => utils::uninstall(&package_name),
         Commands::Sepolicy { command } => match command {
@@ -827,6 +1015,29 @@ pub fn run() -> Result<()> {
                 MarkCommand::Refresh => debug::mark_refresh(),
             },
             Debug::Sulogd => sulog::ensure_sulogd_running(),
+            Debug::Info => {
+                let info = ksucalls::get_info();
+                println!("version: {}", info.version);
+                println!("flags: 0x{:x}", info.flags);
+                println!("uapi_version: {}", info.uapi_version);
+                println!("features: 0x{:x}", info.features);
+                println!("lkm: {}", ksucalls::is_lkm());
+                println!(
+                    "bundled: {}",
+                    (info.flags & ksu_uapi::KSU_GET_INFO_FLAG_BUNDLED) != 0
+                );
+                println!("late_load: {}", ksucalls::is_late_load());
+                println!("runtime_mode: {}", ksucalls::runtime_mode());
+                println!(
+                    "pr_build: {}",
+                    (info.flags & ksu_uapi::KSU_GET_INFO_FLAG_PR_BUILD) != 0
+                );
+                Ok(())
+            }
+            Debug::Package => {
+                println!("{}", defs::DEFAULT_PACKAGE_NAME);
+                Ok(())
+            }
         },
 
         Commands::BootPatch(boot_patch) => crate::boot_patch::patch(boot_patch),
@@ -879,6 +1090,7 @@ pub fn run() -> Result<()> {
             }
         },
         Commands::BootRestore(boot_restore) => crate::boot_patch::restore(boot_restore),
+        Commands::BootPatchV2(patch) => crate::lkm_image::patch_boot(&patch),
         Commands::Resetprop { args } => {
             let mut full_args = vec!["resetprop".to_string()];
             full_args.extend(args);
@@ -890,7 +1102,7 @@ pub fn run() -> Result<()> {
             Kernel::Umount { command } => match command {
                 UmountOp::Add { mnt, flags } => ksucalls::umount_list_add(&mnt, flags),
                 UmountOp::Del { mnt } => ksucalls::umount_list_del(&mnt),
-                UmountOp::Wipe => ksucalls::umount_list_wipe().map_err(Into::into),
+                UmountOp::Wipe => ksucalls::umount_list_wipe(),
             },
             Kernel::NotifyModuleMounted => {
                 ksucalls::report_module_mounted();
@@ -901,6 +1113,13 @@ pub fn run() -> Result<()> {
                 let v = version.unwrap_or_default();
                 ksucalls::set_spoof_version(&r, &v)
             }
+            Kernel::SpoofCpu {
+                cpu,
+                midr,
+                bogomips,
+                hwcap,
+                hwcap2,
+            } => ksucalls::set_spoof_cpu(cpu, midr, bogomips, hwcap, hwcap2),
         },
         Commands::Initrc { command } => match command {
             Initrc::Refresh => regenerate_preinit_rc(),
@@ -938,13 +1157,120 @@ pub fn run() -> Result<()> {
         }
         #[cfg(target_arch = "aarch64")]
         Commands::Susfs { command } => {
-            match command {
-                Susfs::Version => println!("{}", susfs::get_susfs_version()),
-
-                Susfs::Status => println!("{}", susfs::get_susfs_status()),
-
-                Susfs::Features => println!("{}", susfs::get_susfs_features()),
-            }
+            let _ = match command {
+                Susfs::Status => {
+                    println!("{}", susfs::get_susfs_status());
+                    Ok(())
+                }
+                Susfs::Version => {
+                    println!("{}", susfs::get_susfs_version());
+                    Ok(())
+                }
+                Susfs::Variant => {
+                    println!("{}", susfs::get_susfs_variant());
+                    Ok(())
+                }
+                Susfs::Features => {
+                    println!("{}", susfs::get_susfs_features());
+                    Ok(())
+                }
+                Susfs::SetUname { release, version } => susfs::set_uname(&release, &version),
+                Susfs::EnableLog { enabled } => susfs::enable_log(enabled != 0),
+                Susfs::EnableAvcLogSpoofing { enabled } => {
+                    susfs::enable_avc_log_spoofing(enabled != 0)
+                }
+                Susfs::SetCmdlineOrBootconfig { path } => susfs::set_cmdline_or_bootconfig(&path),
+                Susfs::HideSusMntsForNonSuProcs { enabled } => {
+                    susfs::hide_sus_mnts_for_non_su_procs(enabled != 0)
+                }
+                Susfs::AddOpenRedirect {
+                    target,
+                    redirected,
+                    uid_scheme,
+                } => susfs::add_open_redirect(&target, &redirected, uid_scheme),
+                Susfs::AddSusMap { path } => susfs::add_sus_map(&path),
+                Susfs::AddSusPath { path } => susfs::add_sus_path(&path),
+                Susfs::AddSusPathLoop { path } => susfs::add_sus_path_loop(&path),
+                Susfs::AddSusKstat { path } => susfs::add_sus_kstat(&path),
+                Susfs::UpdateSusKstat { path } => susfs::update_sus_kstat(&path),
+                Susfs::UpdateSusKstatFullClone { path } => {
+                    susfs::update_sus_kstat_full_clone(&path)
+                }
+                Susfs::AddSusKstatStatically {
+                    path,
+                    ino,
+                    dev,
+                    nlink,
+                    size,
+                    atime_sec,
+                    atime_nsec,
+                    mtime_sec,
+                    mtime_nsec,
+                    ctime_sec,
+                    ctime_nsec,
+                    blocks,
+                    blksize,
+                } => susfs::add_sus_kstat_statically(
+                    &path, ino, dev, nlink, size, atime_sec, atime_nsec, mtime_sec, mtime_nsec,
+                    ctime_sec, ctime_nsec, blocks, blksize,
+                ),
+                Susfs::Module { command } => {
+                    use crate::susfs_module;
+                    match command {
+                        SusfsModuleCmd::Install => {
+                            susfs_module::install_module()?;
+                            println!("SuSFS module installed successfully");
+                            Ok(())
+                        }
+                        SusfsModuleCmd::Remove => {
+                            susfs_module::remove_module()?;
+                            println!("SuSFS module removed successfully");
+                            Ok(())
+                        }
+                        SusfsModuleCmd::Status => {
+                            if susfs_module::is_module_installed() {
+                                println!("installed");
+                            } else {
+                                println!("not installed");
+                            }
+                            Ok(())
+                        }
+                    }
+                }
+                Susfs::Config { command } => {
+                    use crate::susfs_config;
+                    match command {
+                        SusfsConfigCmd::Get { key } => {
+                            println!("{}", susfs_config::get(&key)?);
+                            Ok(())
+                        }
+                        SusfsConfigCmd::Set { key, value } => {
+                            susfs_config::set(&key, &value)?;
+                            println!("ok");
+                            Ok(())
+                        }
+                        SusfsConfigCmd::Remove { key } => {
+                            susfs_config::remove(&key)?;
+                            println!("ok");
+                            Ok(())
+                        }
+                        SusfsConfigCmd::Clear => {
+                            susfs_config::clear()?;
+                            println!("ok");
+                            Ok(())
+                        }
+                        SusfsConfigCmd::Reset => {
+                            susfs_config::reset_to_defaults()?;
+                            println!("ok");
+                            Ok(())
+                        }
+                        SusfsConfigCmd::List => {
+                            println!("{}", susfs_config::export_json()?);
+                            Ok(())
+                        }
+                    }
+                }
+            };
             Ok(())
         }
     };
@@ -953,4 +1279,24 @@ pub fn run() -> Result<()> {
         log::error!("Error: {e:?}");
     }
     result
+}
+
+fn parse_hex_u32(s: &str) -> Result<u32, String> {
+    let s = s.trim();
+    s.strip_prefix("0x")
+        .or_else(|| s.strip_prefix("0X"))
+        .map_or_else(
+            || s.parse::<u32>().map_err(|e| format!("Invalid u32: {e}")),
+            |hex| u32::from_str_radix(hex, 16).map_err(|e| format!("Invalid hex u32: {e}")),
+        )
+}
+
+fn parse_hex_u64(s: &str) -> Result<u64, String> {
+    let s = s.trim();
+    s.strip_prefix("0x")
+        .or_else(|| s.strip_prefix("0X"))
+        .map_or_else(
+            || s.parse::<u64>().map_err(|e| format!("Invalid u64: {e}")),
+            |hex| u64::from_str_radix(hex, 16).map_err(|e| format!("Invalid hex u64: {e}")),
+        )
 }

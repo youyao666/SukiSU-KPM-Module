@@ -8,7 +8,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use libc::_exit;
-use log::{info, warn};
+use log::{error, info, warn};
 use prop_rs_android::resetprop::ResetProp;
 use prop_rs_android::sys_prop;
 use rustix::process::chdir;
@@ -16,6 +16,11 @@ use std::path::Path;
 use std::process::Command;
 
 pub fn on_post_data_fs() -> Result<()> {
+    if let Err(e) = ksucalls::ensure_uapi_version_matched() {
+        error!("{e:#}, skip on_post_fs_data");
+        return Ok(());
+    }
+
     ksucalls::report_post_fs_data();
 
     utils::umask(0);
@@ -175,11 +180,21 @@ pub fn run_stage(stage: &str, block: bool) {
 }
 
 pub fn on_services() {
+    if let Err(e) = ksucalls::ensure_uapi_version_matched() {
+        error!("{e:#}, skip on_services");
+        return;
+    }
+
     info!("on_services triggered!");
     run_stage("service", false);
 }
 
 pub fn on_boot_completed() {
+    if let Err(e) = ksucalls::ensure_uapi_version_matched() {
+        error!("{e:#}, skip on_boot_completed");
+        return;
+    }
+
     ksucalls::report_boot_complete();
     info!("on_boot_completed triggered!");
 
@@ -193,6 +208,7 @@ const fn resetprop() -> ResetProp {
         persist_only: false,
         verbose: false,
         show_context: false,
+        rebuild: false,
     }
 }
 
@@ -254,6 +270,12 @@ fn catch_bootlog(logname: &str, command: &[&str]) -> Result<()> {
 }
 
 pub fn soft_reboot() -> Result<()> {
+    // check it avoid user click "soft_reboot" in manager when version mismatch
+    if let Err(e) = ksucalls::ensure_uapi_version_matched() {
+        error!("{e:#}, skip soft_reboot");
+        return Ok(());
+    }
+
     utils::daemonize_with(true, || -> Result<()> {
         switch_mnt_ns(1)?;
         chdir("/")?;
