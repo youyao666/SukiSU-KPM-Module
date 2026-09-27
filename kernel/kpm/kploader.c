@@ -250,9 +250,9 @@ static bool is_core_symbol(const Elf_Sym *src, const Elf_Shdr *sechdrs, unsigned
  * KP symbol model: kpm code references kernel symbols as pointer
  * VARIABLES (headers declare `extern void (*printk)(...)`), emitting
  * `adrp xN, sym; ldr x8,[xN..]; blr x8`. The symbol value must therefore
- * be a memory slot holding the real address, not the function body
- * (r12 pstore: blr jumped to instruction bytes read from printk.cfi_jt).
- * Each UND symbol gets an 8-byte slot; slots live until unload.
+ * be a memory slot holding the real address, not the function body.
+ * Slots were pre-carved at the tail of the module image by the caller
+ * (must be within ADRP's +/-4GB of the code).
  */
 static int simplify_symbols(struct kpm_module *mod, struct kpm_load_info *info)
 {
@@ -262,16 +262,6 @@ static int simplify_symbols(struct kpm_module *mod, struct kpm_load_info *info)
     unsigned int i;
     int ret = 0;
     unsigned long addr = 0;
-    unsigned int n_und = 0;
-
-    for (i = 1; i < symsec->sh_size / sizeof(Elf_Sym); i++) {
-        if (sym[i].st_shndx == SHN_UNDEF && sym[i].st_name) n_und++;
-    }
-    if (n_und && !info->ptr_slots) {
-        info->ptr_slots = kmalloc_array(n_und, sizeof(unsigned long), GFP_KERNEL);
-        if (!info->ptr_slots) return -ENOMEM;
-        info->n_slots = n_und;
-    }
 
     for (i = 1; i < symsec->sh_size / sizeof(Elf_Sym); i++) {
         const char *name = info->strtab + sym[i].st_name;
@@ -567,8 +557,29 @@ long kpm_load_module(const void *data, int len, const char *args, const char *ev
     layout_sections(mod, info);
     layout_symtab(mod, info);
 
+    /*
+     * Pointer slots must live INSIDE the module memory: ADRP (reloc 275)
+     * has a +/-4GB range; a kmalloc slot in the linear map sits ~90TB
+     * away from the module_alloc region and overflows (r13: "overflow in
+     * relocation type 275").
+     */
+    {
+        Elf_Shdr *symsec = &info->sechdrs[info->index.sym];
+        Elf_Sym *sym = (void *)symsec->sh_addr;
+        unsigned int n_und = 0, si;
+        for (si = 1; si < symsec->sh_size / sizeof(Elf_Sym); si++) {
+            if (sym[si].st_shndx == SHN_UNDEF && sym[si].st_name) n_und++;
+        }
+        info->n_slots = n_und;
+        info->slot_off = ALIGN(mod->size, 8);
+        mod->size = info->slot_off + (unsigned int)n_und * 8;
+    }
+
     if ((rc = move_module(mod, info))) goto free;
-    pr_info("kpm: sections moved, resolving symbols\n");
+    if (info->n_slots)
+        info->ptr_slots = (unsigned long *)(mod->start + info->slot_off);
+    pr_info("kpm: sections moved, resolving symbols (%u slots at +%x)\n",
+            info->n_slots, info->slot_off);
     if ((rc = simplify_symbols(mod, info))) goto free;
     pr_info("kpm: symbols resolved, applying relocations\n");
     if ((rc = apply_relocations(mod, info))) goto free;
@@ -582,9 +593,6 @@ long kpm_load_module(const void *data, int len, const char *args, const char *ev
 
     if (!rc) {
         logkfi("[%s] succeed with [%s] \n", mod->info.name, args);
-        mod->ptr_slots = info->ptr_slots;
-        mod->n_slots = info->n_slots;
-        info->ptr_slots = NULL;
         list_add_tail(&mod->list, &kpm_modules.list);
         goto out;
     } else {
@@ -593,7 +601,6 @@ long kpm_load_module(const void *data, int len, const char *args, const char *ev
     }
 
 free:
-    if (info->ptr_slots) kfree(info->ptr_slots);
     if (mod->args) kvfree(mod->args);
     kp_free_exec(mod->start);
 free1:
@@ -621,7 +628,6 @@ long kpm_unload_module(const char *name, void *__user reserved)
 
     if (mod->args) kvfree(mod->args);
     if (mod->ctl_args) kvfree(mod->ctl_args);
-    if (mod->ptr_slots) kfree(mod->ptr_slots);
 
     kp_free_exec(mod->start);
     kvfree(mod);

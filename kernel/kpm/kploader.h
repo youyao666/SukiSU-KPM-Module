@@ -25,7 +25,7 @@ struct kpm_load_info
     char *secstrings, *strtab;
     unsigned long symoffs, stroffs;
     unsigned long *ptr_slots;
-    unsigned int n_slots, slot_used;
+    unsigned int n_slots, slot_used, slot_off;
     struct
     {
         unsigned int sym, str, mod, info;
