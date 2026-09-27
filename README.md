@@ -57,6 +57,8 @@ fork 本仓库后 GitHub Actions 自动可用（push 或手动触发）：
 
 ## 致谢与许可
 
+- **[酷安 @御坂114515号](https://www.coolapk.com)（CVE-2026-43499 exploit 作者）** —— 免解锁 BL 的临时 root 能力是本路线的地基：没有这个提权通道，"不刷内核装载模块"就无从谈起
+- **红米 Note11TPro 免 BL 临时 root 教程的分享者与社区** —— MIUI IMQS 装载通道等关键拼图来自社区教程
 - [SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra) 及其贡献者
 - [KernelPatch](https://github.com/bmax121/KernelPatch) / bmax121（`module.c` / `relo.c` / `kpmodule.h` 移植母本）
 
