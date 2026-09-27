@@ -70,6 +70,7 @@ ccflags-y += -DCONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER=1
 endif
 endif
 
+ccflags-$(CONFIG_KPM) += -DCONFIG_KPM
 obj-$(CONFIG_KPM) += kpm/compact.o
 obj-$(CONFIG_KPM) += kpm/kpm.o
 obj-$(CONFIG_KPM) += kpm/super_access.o
