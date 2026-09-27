@@ -71,18 +71,34 @@ static void kp_execmem_resolve(void)
         pfn_module_memfree = (void *)find_kernel_symbol_exact("module_memfree");
 }
 
+#ifndef __nocfi
+#define __nocfi __attribute__((no_sanitize("cfi")))
+#endif
+
+static void *__nocfi kp_call_module_alloc(void *target, unsigned long size)
+{
+    void *(*fn)(unsigned long) = target;
+    return fn(size);
+}
+
+static void __nocfi kp_call_module_memfree(void *target, void *ptr)
+{
+    void (*fn)(void *) = target;
+    fn(ptr);
+}
+
 static inline void *kp_malloc_exec(unsigned int size)
 {
     kp_execmem_resolve();
     if (!pfn_module_alloc)
         return NULL;
-    return pfn_module_alloc(size);
+    return kp_call_module_alloc((void *)pfn_module_alloc, size);
 }
 
 static inline void kp_free_exec(void *ptr)
 {
     if (pfn_module_memfree && ptr)
-        pfn_module_memfree(ptr);
+        kp_call_module_memfree((void *)pfn_module_memfree, ptr);
 }
 
 static inline void kp_flush_icache_all(void)

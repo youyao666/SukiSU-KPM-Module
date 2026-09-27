@@ -33,13 +33,28 @@
 /* not exported on arm64 5.10 (no CRC entry) -> resolve from kallsyms */
 static u32 (*pfn_encode_immediate)(enum aarch64_insn_imm_type type, u32 insn, u32 imm);
 
+#ifndef __nocfi
+#define __nocfi __attribute__((no_sanitize("cfi")))
+#endif
+
+/*
+ * CFI kernels (MIUI GKI) reject indirect calls to kallsyms-resolved
+ * vmlinux functions (r7 panic: CFI failure target:module_alloc), so the
+ * call itself must live in a __nocfi function.
+ */
+static u32 __nocfi kp_call_encode_immediate(void *target, enum aarch64_insn_imm_type type, u32 insn, u32 imm)
+{
+    u32 (*fn)(enum aarch64_insn_imm_type, u32, u32) = target;
+    return fn(type, insn, imm);
+}
+
 static u32 kp_encode_immediate(enum aarch64_insn_imm_type type, u32 insn, u32 imm)
 {
     if (!pfn_encode_immediate)
         pfn_encode_immediate = (void *)find_kernel_symbol_exact("aarch64_insn_encode_immediate");
     if (!pfn_encode_immediate)
         return 0;
-    return pfn_encode_immediate(type, insn, imm);
+    return kp_call_encode_immediate((void *)pfn_encode_immediate, type, insn, imm);
 }
 
 enum aarch64_reloc_op
