@@ -94,8 +94,11 @@ unsigned long __nocfi kp_remote_call4(void *fn, unsigned long a0, unsigned long 
 static inline void *kp_malloc_exec(unsigned int size)
 {
     kp_execmem_resolve();
-    if (!pfn_module_alloc)
+    if (!pfn_module_alloc) {
+        pr_err("kpm: module_alloc unresolved\n");
         return NULL;
+    }
+    pr_info("kpm: calling module_alloc(%x) at %px\n", size, (void *)pfn_module_alloc);
     return (void *)kp_remote_call4((void *)pfn_module_alloc, size, 0, 0, 0);
 }
 
@@ -257,6 +260,7 @@ static int simplify_symbols(struct kpm_module *mod, const struct kpm_load_info *
                 ret = -ENOENT;
                 break;
             }
+            pr_info("kpm: symbol %s -> %px\n", name, (void *)addr);
             sym[i].st_value = addr;
             break;
         default:
@@ -342,6 +346,7 @@ static int move_module(struct kpm_module *mod, struct kpm_load_info *info)
     if (!mod->start) {
         return -ENOMEM;
     }
+    pr_info("kpm: module mem at %px\n", mod->start);
     memset(mod->start, 0, mod->size);
 
     /* Transfer each section which specifies SHF_ALLOC */
@@ -506,11 +511,15 @@ long kpm_load_module(const void *data, int len, const char *args, const char *ev
     layout_symtab(mod, info);
 
     if ((rc = move_module(mod, info))) goto free;
+    pr_info("kpm: sections moved, resolving symbols\n");
     if ((rc = simplify_symbols(mod, info))) goto free;
+    pr_info("kpm: symbols resolved, applying relocations\n");
     if ((rc = apply_relocations(mod, info))) goto free;
 
     kp_flush_icache_all();
 
+    pr_info("kpm: calling init at %px (init=%px exit=%px)\n",
+            (void *)*mod->init, (void *)mod->init, (void *)mod->exit);
     rc = (long)kp_remote_call4((void *)*mod->init, (unsigned long)mod->args,
                                (unsigned long)event, (unsigned long)reserved, 0);
 
