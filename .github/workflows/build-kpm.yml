@@ -26,6 +26,12 @@ jobs:
       run: |
         git config --global --add safe.directory /__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}
         cd kernel
+        MODPOST=/opt/ddk/kdir/android12-5.10/scripts/mod/modpost.c
+        echo "=== Restoring modpost check_exports (undo ddk patch) ==="
+        sed -i -E 's|^([[:space:]]*)// check_exports\(mod\);|check_exports(mod);|' "$MODPOST" || true
+        sed -i -E 's|^([[:space:]]*)// s->module = exp->module;|s->module = exp->module;|' "$MODPOST" || true
+        sed -i 's/^static void __attribute__((unused)) check_exports(/static void check_exports(/' "$MODPOST" || true
+        grep -c "check_exports(mod);" "$MODPOST" || true
         echo "=== Building kernelsu.ko (KPM=y) for KMI: ${{ inputs.kmi || 'android12-5.10' }} ==="
         CONFIG_KSU=m CONFIG_KPM=y CC=clang make
         echo "=== Build completed ==="
