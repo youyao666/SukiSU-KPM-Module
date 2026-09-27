@@ -54,7 +54,7 @@ jobs:
         for f in "$MODS"/*.c; do
           b=$(basename "$f")
           case "$b" in
-            modpost.c|sumversion.c|file2alias.c) continue ;;
+            modpost.c|sumversion.c|file2alias.c|devicetable-offsets.c) continue ;;
             *) SRCS="$SRCS $f" ;;
           esac
         done
