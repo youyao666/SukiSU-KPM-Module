@@ -25,6 +25,7 @@
 #include <linux/rcupdate.h>
 #include <linux/uaccess.h>
 #include <linux/mm.h>
+#include <linux/moduleloader.h>
 #include <asm/elf.h>
 #include <asm/cacheflush.h>
 #include <uapi/linux/elf.h>
@@ -36,14 +37,11 @@
 
 #define SZ_128M 0x08000000
 
-#define ALIGN_MASK(x, mask) (((x) + (mask)) & ~(mask))
-#define ALIGN(x, a) ALIGN_MASK(x, (typeof(x))(a)-1)
-
 #define align(X) ALIGN(X, PAGE_SIZE)
 
-#define elf_check_arch(x) ((x)->e_machine == EM_AARCH64)
-
+#ifndef ARCH_SHF_SMALL
 #define ARCH_SHF_SMALL 0
+#endif
 
 #define logkd(fmt, ...) pr_info("kpm: " fmt, ##__VA_ARGS__)
 #define logke(fmt, ...) pr_err("kpm: " fmt, ##__VA_ARGS__)
@@ -72,11 +70,6 @@ static inline void kp_flush_icache_all(void)
     __asm__ __volatile__("ic ialluis" ::: "memory");
     __asm__ __volatile__("dsb nsh" ::: "memory");
     __asm__ __volatile__("isb" ::: "memory");
-}
-
-static inline bool strstarts(const char *str, const char *prefix)
-{
-    return strncmp(str, prefix, strlen(prefix)) == 0;
 }
 
 static char *next_string(char *string, unsigned long *secsize)
