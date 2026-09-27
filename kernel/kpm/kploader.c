@@ -50,8 +50,19 @@
 #define logkfe(fmt, ...) pr_err("kpm: " fmt, ##__VA_ARGS__)
 #define logkfi(fmt, ...) pr_info("kpm: " fmt, ##__VA_ARGS__)
 
+/*
+ * r11 pstore: kallsyms_lookup_name("printk") returned a misaligned
+ * alias/thunk interior (0x...0c) -> bl landed mid-instruction -> panic
+ * in hello_init. Kernel symbols must resolve through the .cfi_jt trampoline
+ * first (aligned, bti c, direct branch to the real body), which is exactly
+ * what the resolver below does. Our own KP env symbols (kpver etc.) live in
+ * the compact table and are not in kallsyms at all.
+ */
 static inline unsigned long symbol_lookup_name(const char *name)
 {
+    unsigned long addr = (unsigned long)ksu_resolve_symbol_for_functable_hook(name);
+    if (addr)
+        return addr;
     return sukisu_compact_find_symbol(name);
 }
 
