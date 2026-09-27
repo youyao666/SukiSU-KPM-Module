@@ -48,15 +48,11 @@ jobs:
         rm -f "$KDIR/scripts/mod/modpost"
         touch "$MODPOST"
         gcc -O2 -c -I"$SRC/scripts/mod" -I"$KDIR/scripts/mod" -Dmain=file2alias_main "$SRC/scripts/mod/file2alias.c" -o /tmp/file2alias.o || true
-        # 6.6+ splits modpost (symcheck.c etc.) - compile every helper except file2alias
+        # 6.6+ splits modpost (symcheck.c); whitelist only known-safe extras
         MODS="$SRC/scripts/mod"
         SRCS=""
-        for f in "$MODS"/*.c; do
-          b=$(basename "$f")
-          case "$b" in
-            modpost.c|sumversion.c|file2alias.c|devicetable-offsets.c) continue ;;
-            *) SRCS="$SRCS $f" ;;
-          esac
+        for extra in symcheck.c; do
+          [ -f "$MODS/$extra" ] && SRCS="$SRCS $MODS/$extra"
         done
         echo "modpost sources: modpost.c sumversion.c$SRCS"
         gcc -O2 -I"$SRC/scripts/mod" -I"$KDIR/scripts/mod" -o "$KDIR/scripts/mod/modpost" "$MODPOST" "$MODS/sumversion.c" $SRCS /tmp/file2alias.o || true
